@@ -14,6 +14,10 @@ import {
   CARD_ICON,
   swipeAction,
   swipeLock,
+  cardTime,
+  tripDates,
+  tripsOf,
+  type Trip,
   cardLine,
   cardLink,
   type MailCard,
@@ -566,6 +570,10 @@ function ReminderRow({ r, task, picking, setPicking }: { r: DueReminder; task: E
 
 function Flat({ messages, view, bundle, open, setOpen, edit }: { messages: MailThread[]; view: MailView; bundle: Bundle | null; open: string | null; setOpen: (id: string | null) => void; edit?: () => void }) {
   const editButton = edit && <button type="button" className="mailx-act mailx-editbundle" onClick={edit}><Icon name="pencil" /><span>Edit bundle</span></button>;
+  // The Trips bundle: each trip's mail as one box, then the mail in no trip as rows.
+  const trips = bundle?.id === "trips" ? tripsOf(messages) : [];
+  const inTrips = new Set(trips.flatMap((t) => t.parts.map((p) => p.mail.id)));
+  const rest = messages.filter((m) => !inTrips.has(m.id));
   if (!messages.length) {
     if (view === "snoozed") return <Empty title="Nothing snoozed" text="Snoozed mail waits here until its time." />;
     if (view === "done") return <Empty title="Nothing done yet" text="Mail you mark done shows here." />;
@@ -576,10 +584,41 @@ function Flat({ messages, view, bundle, open, setOpen, edit }: { messages: MailT
       {bundle && <ModuleLink b={bundle} />}
       {editButton}
       {bundle && <DeliveryControl b={bundle} mails={messages} />}
-      <div className="mailx-list">
-        {messages.map((m) => <Row key={m.id} m={m} open={open === m.id} setOpen={setOpen} />)}
-      </div>
+      {trips.map((t) => <TripBox key={t.id} t={t} open={open} setOpen={setOpen} />)}
+      {rest.length > 0 && (
+        <div className="mailx-list">
+          {rest.map((m) => <Row key={m.id} m={m} open={open === m.id} setOpen={setOpen} />)}
+        </div>
+      )}
     </div>
+  );
+}
+
+/**
+ * A trip as one box (the Trips bundle): its name and days, then its pieces in time order (the flight out, the hotel,
+ * the flight back), each opening its own mail in the box. A mail with two pieces (out and back) opens from either.
+ */
+function TripBox({ t, open, setOpen }: { t: Trip<MailThread>; open: string | null; setOpen: (id: string | null) => void }) {
+  const opened = t.parts.find((p) => p.mail.id === open)?.mail;
+  const past = t.end + 86_400_000 < Date.now();
+  return (
+    <section className={`mailx-trip b-trips${past ? " past" : ""}`} aria-label={`${t.name}, ${tripDates(t)}`}>
+      <div className="mailx-trip-head">
+        <span className="mailx-av bundle b-trips" aria-hidden="true"><Icon name="trips" /></span>
+        <span><b>{t.name}</b><span className="muted"> · {tripDates(t)}{past ? " · Over" : ""}</span></span>
+      </div>
+      <ol className="mailx-trip-parts">
+        {t.parts.map((p, i) => (
+          <li key={i}>
+            <button type="button" className={`mailx-trip-part${isUnread(p.mail) ? " unread" : ""}`} aria-expanded={open === p.mail.id} onClick={() => setOpen(open === p.mail.id ? null : p.mail.id)}>
+              <span className="when">{cardTime(p.card.at!)}</span>
+              <span className="what">{cardLine({ ...p.card, at: undefined })}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+      {opened && <Card m={opened} close={() => setOpen(null)} />}
+    </section>
   );
 }
 
@@ -697,6 +736,9 @@ function ModuleLink({ b }: { b: Bundle }) {
 function BundleRow({ b, nav, mails, isOpen, toggle, open, setOpen }: { b: Bundle; nav: string; mails: MailThread[]; isOpen: boolean; toggle: () => void; open: string | null; setOpen: (id: string | null) => void }) {
   const { cursor } = useContext(Look);
   const unread = mails.filter(isUnread).length;
+  // The Trips row says the next trip not over yet ("Trip to JFK, Dec 3 to 6"), else who the mail is from.
+  const soon = b.id === "trips" ? tripsOf(mails)[0] : undefined;
+  const next = soon && soon.end + 86_400_000 >= Date.now() ? soon : null;
   return (
     <div className={`mailx-bundle ${bundleClass(b)}${isOpen ? " open" : ""}${cursor === nav ? " cursor" : ""}`} data-nav={nav}>
       <button type="button" className={`mailx-row${unread ? " unread" : ""}`} aria-expanded={isOpen} onClick={toggle}>
@@ -704,7 +746,7 @@ function BundleRow({ b, nav, mails, isOpen, toggle, open, setOpen }: { b: Bundle
         <span className="mailx-av bundle"><Icon name={b.custom !== undefined ? "own" : b.id} /></span>
         <span className="mailx-what">
           <span className="who"><b className="bname">{b.name}</b><span className="chip">{unread ? `${unread} new` : mails.length}</span></span>
-          <span className="line">{sendersLine(mails)}</span>
+          <span className="line">{next ? `${next.name}, ${tripDates(next)}` : sendersLine(mails)}</span>
         </span>
         <span className="when">{whenLabel(mails[0].at)}</span>
       </button>

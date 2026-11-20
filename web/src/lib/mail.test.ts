@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -349,5 +349,42 @@ describe("mail swipes", () => {
     expect(swipeAction(-80, 375)).toBeNull();
     expect(swipeAction(75, 200)).toBe("done");
     expect(swipeAction(60, 200)).toBeNull();
+  });
+});
+
+describe("mail trips", () => {
+  const mail = (id: string, cards: MailCard[]): MailSummary => ({ id, at: "2026-11-20T12:00:00Z", from: { name: "", address: "x@air.example" }, subject: id, preview: "", automated: true, bundle: "trips", state: "inbox", pinned: false, seen: true, cards });
+  const out = mail("out", [{ kind: "flight", source: "sender", number: "EA 110", from: "SFO", to: "JFK", at: "2026-12-03T16:00:00Z", until: "2026-12-03T21:30:00Z" }]);
+  const hotel = mail("hotel", [{ kind: "stay", source: "sender", title: "Harbor Inn", at: "2026-12-03", until: "2026-12-06" }]);
+  const back = mail("back", [{ kind: "flight", source: "sender", number: "EA 111", from: "JFK", to: "SFO", at: "2026-12-06T18:00:00Z" }]);
+  const now = Date.parse("2026-11-20T12:00:00Z");
+
+  it("groups the flight out, the hotel and the flight back as one trip, named by where the first flight lands", () => {
+    const [t, ...others] = tripsOf([back, hotel, out], now);
+    expect(others).toEqual([]);
+    expect(t.name).toBe("Trip to JFK");
+    expect(t.parts.map((p) => p.mail.id)).toEqual(["out", "hotel", "back"]);
+    expect(tripDates(t)).toBe(`${new Date(2026, 11, 3).toLocaleDateString([], { month: "short", day: "numeric" })} to 6`);
+  });
+
+  it("needs two mails, never starts with a booking, and keeps trips weeks apart separate", () => {
+    expect(tripsOf([out], now)).toEqual([]);
+    const dinner = mail("dinner", [{ kind: "table", source: "sender", title: "Bistro", at: "2026-11-28T19:00:00Z" }]);
+    const show = mail("show", [{ kind: "event", source: "sender", title: "Concert", at: "2026-11-28T21:00:00Z" }]);
+    expect(tripsOf([dinner, show], now)).toEqual([]); // a dinner and a show at home are no trip
+    const later = mail("later", [{ kind: "stay", source: "sender", title: "Lake Lodge", at: "2027-01-10", until: "2027-01-12" }]);
+    const car = mail("car", [{ kind: "booking", source: "sender", title: "Car hire", at: "2027-01-10T15:00:00Z" }]);
+    expect(tripsOf([out, hotel, back, later, car], now).map((t) => t.name)).toEqual(["Trip to JFK", "Stay at Lake Lodge"]);
+  });
+
+  it("lists trips not over yet first, the soonest first, then past ones", () => {
+    const old1 = mail("o1", [{ kind: "flight", source: "sender", to: "LAX", at: "2026-10-01T10:00:00Z" }]);
+    const old2 = mail("o2", [{ kind: "stay", source: "sender", title: "Beach Hotel", at: "2026-10-01", until: "2026-10-04" }]);
+    expect(tripsOf([old1, old2, out, hotel], now).map((t) => t.name)).toEqual(["Trip to JFK", "Trip to LAX"]);
+  });
+
+  it("ignores cards without a date, and cards read from text", () => {
+    const conf = mail("conf", [{ kind: "booking", source: "text", number: "X7K2PQ" }]);
+    expect(tripsOf([out, conf], now)).toEqual([]);
   });
 });

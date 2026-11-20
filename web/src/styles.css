@@ -1241,6 +1241,20 @@ a.mailx-row { color: inherit; text-decoration: none; }
 .mailx-fact .mailx-av { width: 28px; height: 28px; }
 .mailx-fact .what { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
 .mailx-fact button { flex: none; }
+/* A trip (the Trips bundle): one box, its pieces as a timeline down a band of the Trips color. */
+.mailx-trip { --c: var(--b-trips); --ct: var(--bt-trips); margin-bottom: 12px; background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.mailx-trip.past { opacity: .75; }
+.mailx-trip-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.mailx-trip-head b { color: var(--ct); }
+.mailx-trip-parts { list-style: none; margin: 0 12px 10px 28px; padding: 0 0 0 16px; border-left: 3px solid var(--c); }
+.mailx-trip-part { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr); gap: 12px; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 6px 8px; min-height: 0; font-size: 14px; }
+.mailx-trip-part:hover { background: var(--mail-hover); }
+.mailx-trip-part .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.mailx-trip-part .what { overflow-wrap: anywhere; }
+.mailx-trip-part.unread .what { font-weight: 700; }
+.mailx-trip-part[aria-expanded="true"] { background: var(--mail-hover); }
+.mailx-trip > .mailx-card { margin: 0 8px 8px; }
+@media (max-width: 480px) { .mailx-trip-part { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 /* A verified brand logo: on white, as brands design them, clipped to the circle. */
 .mailx-av.logo { background: #fff; overflow: hidden; padding: 0; }
 .mailx-av.logo img { width: 100%; height: 100%; object-fit: cover; display: block; }

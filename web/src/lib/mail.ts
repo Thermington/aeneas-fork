@@ -58,6 +58,79 @@ export function cardLine(c: MailCard): string {
   return parts.filter((x): x is string => !!x).join(" · ");
 }
 
+/** A card's time in milliseconds: a day (`YYYY-MM-DD`) at the device's own midnight, a time as written; NaN if neither. */
+export function cardMs(at: string): number {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(at);
+  return day ? new Date(+day[1], +day[2] - 1, +day[3]).getTime() : Date.parse(at);
+}
+
+/** One piece of a trip: a card with a date, and the thread whose mail it came from. */
+export interface TripPart<T> { card: MailCard; mail: T; start: number; end: number }
+/** A trip: a flight's or a stay's mail and the bookings around it, as one. `name`: "Trip to JFK", "Stay at Harbor Inn". */
+export interface Trip<T> { id: string; name: string; start: number; end: number; parts: TripPart<T>[] }
+
+const TRIP_KINDS = new Set<MailCard["kind"]>(["flight", "stay", "booking", "table", "event"]);
+const DAY_MS = 86_400_000;
+
+/**
+ * The trips in some mail, from its cards' dates (the sender's data; cards read from text have none):
+ * - flights and stays make trips: each joins the one before while it starts within a day of where that one ends (the
+ *   flight out, the hotel, the flight back);
+ * - a booking, a table or an event only joins a trip it is within a day of, never makes one (a dinner at home is no
+ *   trip); a day without a time counts at the usual hour (check-in 3 PM, check-out 11 AM, else noon);
+ * - a trip is at least two mails (one flight alone stays a row of its own).
+ * Trips not over yet come first, the soonest first; then past ones, the latest first.
+ */
+export function tripsOf<T extends MailSummary & { members?: MailSummary[] }>(mails: T[], now = Date.now()): Trip<T>[] {
+  const parts: TripPart<T>[] = [];
+  for (const m of mails) {
+    for (const c of (m.members ?? [m]).flatMap((x) => x.cards ?? [])) {
+      if (!TRIP_KINDS.has(c.kind) || !c.at) continue;
+      // A day without a time is put at the usual hour, so a stay follows the flight that lands that day: check-in at
+      // 3 PM, check-out at 11 AM, anything else at noon.
+      const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+      const start = cardMs(c.at) + (isDay(c.at) ? (c.kind === "stay" ? 15 : 12) * 3_600_000 : 0);
+      const end = c.until ? cardMs(c.until) + (isDay(c.until) ? 11 * 3_600_000 : 0) : start;
+      if (Number.isNaN(start)) continue;
+      parts.push({ card: c, mail: m, start, end: Number.isNaN(end) || end < start ? start : end });
+    }
+  }
+  parts.sort((a, b) => a.start - b.start);
+  // First the flights and stays, chained; then each other booking joins a trip it is within a day of.
+  const seeds = (p: TripPart<T>) => p.card.kind === "flight" || p.card.kind === "stay";
+  const trips: Trip<T>[] = [];
+  let cur: Trip<T> | null = null;
+  for (const p of parts.filter(seeds)) {
+    if (cur && p.start <= cur.end + DAY_MS) { cur.parts.push(p); cur.end = Math.max(cur.end, p.end); continue; }
+    cur = { id: p.mail.id, name: "", start: p.start, end: p.end, parts: [p] };
+    trips.push(cur);
+  }
+  for (const p of parts.filter((x) => !seeds(x))) {
+    const t = trips.find((x) => p.start >= x.start - DAY_MS && p.start <= x.end + DAY_MS);
+    if (!t) continue;
+    t.parts.push(p);
+    t.start = Math.min(t.start, p.start);
+    t.end = Math.max(t.end, p.end);
+  }
+  for (const t of trips) t.parts.sort((a, b) => a.start - b.start);
+  const kept = trips.filter((t) => new Set(t.parts.map((p) => p.mail.id)).size >= 2);
+  for (const t of kept) {
+    const flight = t.parts.find((p) => p.card.kind === "flight" && p.card.to)?.card;
+    const stay = t.parts.find((p) => p.card.kind === "stay" && p.card.title)?.card;
+    t.name = flight ? `Trip to ${flight.to}` : stay ? `Stay at ${stay.title}` : "Trip";
+  }
+  const over = (t: Trip<T>) => t.end + DAY_MS < now;
+  return [...kept.filter((t) => !over(t)).sort((a, b) => a.start - b.start), ...kept.filter(over).sort((a, b) => b.start - a.start)];
+}
+
+/** A trip's days: "Dec 3 to 6", "Dec 30 to Jan 2", or one day. */
+export function tripDates(t: { start: number; end: number }): string {
+  const a = new Date(t.start), b = new Date(t.end);
+  const md = (d: Date) => d.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (a.toDateString() === b.toDateString()) return md(a);
+  return a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear() ? `${md(a)} to ${b.getDate()}` : `${md(a)} to ${md(b)}`;
+}
+
 /**
  * A touch on a row, once it has moved: sideways (`h`, a swipe) or up and down (`v`, the list scrolls), or null while it
  * has moved under 10px. Sideways only when clearly so (half again as much across as down), so scrolling never swipes.
