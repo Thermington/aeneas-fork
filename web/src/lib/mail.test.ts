@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -306,5 +306,29 @@ describe("mail batches", () => {
     expect(parts.map((p) => p.length)).toEqual([BATCH_MAX, BATCH_MAX, 201]);
     expect(parts.flat()).toEqual(ids);
     expect(batches([])).toEqual([]);
+  });
+});
+
+describe("mail cards", () => {
+  it("says a card's facts in one line, in the order a person looks for them", () => {
+    expect(cardLine({ kind: "package", source: "text", title: "UPS", number: "1Z999AA10123456784" })).toBe("UPS · 1Z999AA10123456784");
+    expect(cardLine({ kind: "flight", source: "sender", title: "Example Air", number: "EA 110", from: "SFO", to: "JFK" })).toBe("EA 110 · SFO → JFK");
+    expect(cardLine({ kind: "bill", source: "text", title: "City Water", amount: "$61.50", at: "2026-12-15" })).toBe(`City Water · $61.50 due · By ${cardTime("2026-12-15")}`);
+    expect(cardLine({ kind: "order", source: "sender" })).toBe("");
+  });
+
+  it("shows a day without a time as that day wherever the device is", () => {
+    // A day is read as the device's own midnight, never as UTC's (which is the day before in the Americas).
+    expect(cardTime("2026-12-15")).toBe(new Date(2026, 11, 15).toLocaleString([], { weekday: "short", month: "short", day: "numeric" }));
+    expect(cardTime("2026-12-03T16:00:00.000Z")).toMatch(/\d:\d\d/);
+    expect(cardTime("soon")).toBe("");
+  });
+
+  it("opens a card's link only when it is https", () => {
+    expect(cardLink({ kind: "package", source: "sender", url: "https://track.example/1" })).toBe("https://track.example/1");
+    expect(cardLink({ kind: "package", source: "sender", url: "http://track.example/1" })).toBeNull();
+    expect(cardLink({ kind: "package", source: "sender", url: "javascript:alert(1)" })).toBeNull();
+    expect(cardLink({ kind: "package", source: "sender", url: "https://a:b@track.example/1" })).toBeNull();
+    expect(cardLink({ kind: "package", source: "text" })).toBeNull();
   });
 });

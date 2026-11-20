@@ -12,6 +12,10 @@ import { plainError } from "../lib/errors";
 import { fmtDateTime } from "../lib/time";
 import {
   bundleClass,
+  CARD_ICON,
+  cardLine,
+  cardLink,
+  type MailCard,
   bundleOf,
   deliveryAt,
   dueReminders,
@@ -762,6 +766,8 @@ function Row({ m, open, setOpen }: { m: MailThread; open: boolean; setOpen: (id:
         <span className="mailx-what">
           <span className="who"><b>{m.people}</b>{m.pinned && <span className="pinmark" title="Pinned"><Icon name="pin" /></span>}</span>
           <span className="line"><span className="subj">{m.subject || "(no subject)"}</span>{m.preview && <> · {m.preview}</>}</span>
+          {/* Its first card's facts, as text (the row is a button: Track is on the open mail). */}
+          {m.cards?.[0] && <span className={`mailx-cardline b-${CARD_ICON[m.cards[0].kind]}`}><Icon name={CARD_ICON[m.cards[0].kind]} />{cardLine(m.cards[0])}</span>}
         </span>
         <span className="when">{m.state === "snoozed" && m.snooze_until ? `Until ${whenLabel(m.snooze_until)}` : whenLabel(m.at)}</span>
       </button>
@@ -972,6 +978,28 @@ function ThreadMessage({ m, startOpen }: { m: MailSummary; startOpen: boolean })
   );
 }
 
+/**
+ * A mail's cards above its body: each one's facts as text, and Track (a package) or Open when it has an https link.
+ * The sender wrote all of it: nothing here is HTML, and the link opens outside the app, like any link in a mail.
+ */
+function MailFacts({ cards }: { cards: MailCard[] }) {
+  return (
+    <div className="mailx-facts mailx-card-pad">
+      {cards.map((c, i) => {
+        const href = cardLink(c);
+        return (
+          <div key={i} className={`mailx-fact b-${CARD_ICON[c.kind]}`}>
+            <span className="mailx-av bundle" aria-hidden="true"><Icon name={CARD_ICON[c.kind]} /></span>
+            <span className="what">{cardLine(c)}</span>
+            {href && <button type="button" className="small" title={new URL(href).hostname} onClick={() => void openExternal(href)}>{c.kind === "package" ? "Track" : "Open"}</button>}
+          </div>
+        );
+      })}
+      {cards.some((c) => c.source === "text") && <span className="muted small">Read from the mail's text: check it against the mail.</span>}
+    </div>
+  );
+}
+
 /** One message's body: the mail as sent (the hub's cleaned page), or its text; fetched from the hub when it shows. */
 function Message({ m }: { m: MailSummary }) {
   const [full, setFull] = useState<MailMessage | null>(null);
@@ -1004,6 +1032,7 @@ function Message({ m }: { m: MailSummary }) {
   return (
     <>
       {nameHidesAddress(m.from) && <div className="warn small mailx-card-pad">The sender's name shows a different address than the one it came from.</div>}
+      {!!m.cards?.length && <MailFacts cards={m.cards} />}
       {askPictures && (
         <div className="mailx-pictures mailx-card-pad small">
           <button type="button" disabled={pictures.busy} onClick={() => void showPictures()}>{pictures.busy ? "Fetching pictures" : "Show pictures"}</button>

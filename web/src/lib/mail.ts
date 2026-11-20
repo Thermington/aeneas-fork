@@ -20,7 +20,46 @@ export interface MailSummary {
   thread?: string;
   /** The owner's own reply (from Sent). */
   mine?: boolean;
+  /** Its key facts (a package, a flight, a bill), from the sender's own data or its text. */
+  cards?: MailCard[];
 }
+
+/**
+ * A mail's key facts (the hub's mail-cards.ts). Written by the sender: plain text, shown as text; `at` and `until` are
+ * an ISO time, or a day (`YYYY-MM-DD`) when the sender gave no time.
+ */
+export interface MailCard {
+  kind: "package" | "flight" | "stay" | "table" | "event" | "bill" | "order" | "booking";
+  title?: string; number?: string; from?: string; to?: string; at?: string; until?: string; amount?: string; status?: string; url?: string;
+  source: "sender" | "text";
+}
+/** A card's icon: the bundle it belongs with. */
+export const CARD_ICON: Record<MailCard["kind"], string> = { package: "purchases", order: "purchases", flight: "trips", stay: "trips", table: "trips", event: "trips", booking: "trips", bill: "bills" };
+
+/** A card's time as words: a day ("Tue, Dec 15"), or a day and time ("Tue, Dec 3, 8:00 AM"). */
+export function cardTime(at: string): string {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(at);
+  const d = day ? new Date(+day[1], +day[2] - 1, +day[3]) : new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", ...(day ? {} : { hour: "numeric", minute: "2-digit" }) });
+}
+
+/** A card in one line, its facts in the order a person looks for them, joined by " · ". */
+export function cardLine(c: MailCard): string {
+  const t = (x?: string) => (x ? cardTime(x) : "");
+  const parts: (string | undefined)[] =
+    c.kind === "package" ? [c.title, c.number, c.at && `Arrives ${t(c.at)}`, c.status]
+    : c.kind === "flight" ? [c.number ?? c.title, c.from && c.to ? `${c.from} → ${c.to}` : undefined, c.at && `Leaves ${t(c.at)}`, c.status]
+    : c.kind === "stay" ? [c.title, c.at && (c.until ? `${t(c.at)} to ${t(c.until)}` : t(c.at)), c.number && `Confirmation ${c.number}`]
+    : c.kind === "bill" ? [c.title, c.amount && `${c.amount} due`, c.at && `By ${t(c.at)}`]
+    : c.kind === "order" ? [c.title, c.number && `Order ${c.number}`, c.amount, c.status]
+    : c.kind === "booking" ? [c.title, c.number && `Confirmation ${c.number}`, c.at && t(c.at)]
+    : [c.title, c.at && t(c.at), c.status, c.number && `Confirmation ${c.number}`];
+  return parts.filter((x): x is string => !!x).join(" · ");
+}
+
+/** Where a card's Track or Open button goes: its https link, checked here again, or null. */
+export const cardLink = (c: MailCard): string | null => (c.url ? httpsLink(c.url)?.href ?? null : null);
 
 /**
  * A thread as one row: it reads like a mail (its newest received one in the thread's state: id, sender, bundle) so the

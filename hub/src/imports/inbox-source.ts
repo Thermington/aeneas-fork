@@ -1,4 +1,5 @@
 import type { Hub } from "../hub.js";
+import type { MailCard } from "../mail-cards.js";
 
 /**
  * Where the Mail screen's mail comes from (CONTRACT.md, Mail): one InboxSource per kind of mailbox. mail-inbox.ts keeps
@@ -41,6 +42,8 @@ export interface InboxMail {
   refs: string[];
   /** The owner's own: a reply from the Sent folder, kept only while its thread is. */
   mine: boolean;
+  /** Its key facts (mail-cards.ts, mailCards): from the sender's schema.org data in its HTML, or patterns in its text. */
+  cards?: MailCard[];
 }
 
 /**

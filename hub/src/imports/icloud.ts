@@ -7,6 +7,7 @@ import { BACKFILL_DAYS, MAIL_QUERY, OVERLAP_MS } from "./gmail.js";
 import type { FetchedMail, MailRef, MailSource } from "./mail-sources.js";
 import { bodyText, readingText } from "./mail-text.js";
 import { cleanMailHtml, pictureData } from "../mail-html.js";
+import { mailCards } from "../mail-cards.js";
 import type { InboxListing, InboxMail, InboxSource, MailAddress, MoveRef } from "./inbox-source.js";
 export type { InboxMail, MailAddress, MoveRef } from "./inbox-source.js";
 
@@ -580,7 +581,10 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
         // The same for its text: one mail the hub cannot read must not keep the rest of the Inbox from arriving.
         let text: string;
         try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
-        mails.push(inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html)));
+        const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html));
+        // Cards from the raw HTML: cleaning takes out the sender's schema.org data (a script) with every other script.
+        m.cards = mailCards(html.join("\n"), m.subject, m.text, m.from, m.automated);
+        mails.push(m);
       }
       // Mail kept before threads: the Message-IDs it answers, headers only (at most REFS_MAX a refresh).
       for (const uid of all.filter((u) => known(id(u)) && opts.needsRefs?.(id(u))).slice(0, REFS_MAX)) {

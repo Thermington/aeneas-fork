@@ -18,6 +18,7 @@ import { ownWords, quoteStart } from "./imports/mail-text.js";
 import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MODULES, type BundleContext } from "./mail-bundles.js";
 import { fetchBytesViaTor, fetchPublicBytes, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
+import { textCards, type MailCard } from "./mail-cards.js";
 
 /**
  * The Mail screen's store (CONTRACT.md, Mail): the iCloud Inbox's mail, sorted into bundles, with what the owner did to
@@ -73,6 +74,7 @@ CREATE TABLE IF NOT EXISTS inbox (
   refs TEXT,
   mine INTEGER NOT NULL DEFAULT 0,
   thread TEXT,
+  cards TEXT,
   PRIMARY KEY (account, id)
 );
 CREATE INDEX IF NOT EXISTS inbox_at ON inbox(at);
@@ -100,6 +102,8 @@ export function openMailDb(dbPath: string): DB {
   if (!inboxCols.includes("thread")) db.exec("ALTER TABLE inbox ADD COLUMN thread TEXT");
   // How far each mailbox's Sent folder has been read, so each sent mail is looked at once (icloud.ts).
   if (!(db.prepare("PRAGMA table_info(mailboxes)").all() as { name: string }[]).some((c) => c.name === "sent_at")) db.exec("ALTER TABLE mailboxes ADD COLUMN sent_at TEXT");
+  // Cards: mail kept before them has none stored (NULL), and gets the ones its text shows when listed.
+  if (!inboxCols.includes("cards")) db.exec("ALTER TABLE inbox ADD COLUMN cards TEXT");
   return db;
 }
 
@@ -131,8 +135,8 @@ const folderOf = (id: string) => /^\d+:\d+:([\s\S]+)$/.exec(id)?.[1] ?? "";
  *    it goes. Done mail is in Archive and stays (for its kept time). Nothing goes when the listing found no Inbox.
  */
 export function keepInbox(db: DB, account: string, found: { present: string[] | null; seen?: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; refs?: { id: string; refs: string[] }[] }): { kept: number; gone: number; woken: string[]; fresh: string[] } {
-  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen, cards)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const setRefs = db.prepare("UPDATE inbox SET refs = ? WHERE account = ? AND id = ?");
   const fresh: string[] = [];
   // A brand's logo, fetched later (fetchMailImages); a new address for it is fetched again.
@@ -154,7 +158,7 @@ export function keepInbox(db: DB, account: string, found: { present: string[] | 
     for (const m of found.mails) {
       const added = insert.run(account, m.id, mailKey(account, m.id), m.message_id, m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
         m.subject, m.text, m.automated ? 1 : 0, m.unsubscribe ? 1 : 0, m.list_id, m.html, m.html && m.remote.length ? JSON.stringify(m.remote) : null, m.logo?.domain ?? null,
-        JSON.stringify(m.refs ?? []), m.mine ? 1 : 0, m.mine ? "sent" : "inbox", m.mine ? 1 : 0).changes;
+        JSON.stringify(m.refs ?? []), m.mine ? 1 : 0, m.mine ? "sent" : "inbox", m.mine ? 1 : 0, JSON.stringify(m.mine ? [] : m.cards ?? [])).changes;
       if (added && !m.mine) { kept++; fresh.push(mailKey(account, m.id)); }
       if (m.logo) logo.run(m.logo.domain, m.logo.url);
     }
@@ -306,6 +310,8 @@ export interface MailSummary {
   thread?: string;
   /** The owner's own reply (state `sent`). */
   mine?: boolean;
+  /** Its key facts (mail-cards.ts): a package, a flight, a bill; absent when it has none. */
+  cards?: MailCard[];
 }
 /**
  * One message whole: its text, and its HTML as a page to show (mailDocument: cleaned, nothing in it loads anything),
@@ -318,7 +324,17 @@ export interface MailMessage extends MailSummary {
   quote_at?: number;
 }
 
-type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number };
+type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number; cards?: string | null };
+
+/**
+ * A message's cards: those stored at refresh (from the sender's data, or its text); for mail kept before cards (NULL),
+ * what its text shows, worked out now. Only for mail a system sent: a person's "my confirmation number is" is theirs.
+ */
+function cardsOf(r: Row): MailCard[] {
+  if (r.mine) return [];
+  if (r.cards != null) { try { return JSON.parse(r.cards) as MailCard[]; } catch { return []; } }
+  return r.automated ? textCards(r.subject, r.text, { name: r.from_name, address: r.from_address }) : [];
+}
 
 /**
  * The first words of a message for the list: its own words (ownWords: not the quoted history a reply carries) on one
@@ -334,7 +350,7 @@ export const previewOf = (text: string) => ownWords(text.slice(0, PREVIEW_READ))
   .replace(/\s+/g, " ").replace(/\s+([.,;:!?])/g, "$1").trim().slice(0, 200);
 
 function summary(r: Row): MailSummary {
-  return {
+  const s: MailSummary = {
     id: r.key, at: r.at, from: { name: r.from_name, address: r.from_address },
     ...(r.reply_to ? { reply_to: r.reply_to } : {}),
     subject: r.subject, preview: previewOf(r.text), automated: !!r.automated, bundle: r.bundle, state: r.state, pinned: !!r.pinned,
@@ -345,6 +361,8 @@ function summary(r: Row): MailSummary {
     ...(r.thread ? { thread: r.thread } : {}),
     ...(r.mine ? { mine: true } : {}),
   };
+  const cards = cardsOf(r);
+  return cards.length ? { ...s, cards } : s;
 }
 
 /** At most this many messages in one list answer, newest first. */
@@ -355,7 +373,7 @@ export const LIST_MAX = 5000;
  * the screen sorts it into Inbox, Snoozed, Done and the bundles.
  */
 export function listMail(db: DB, ctx: BundleContext = NO_MODULES): MailSummary[] {
-  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
+  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
   return rows.map((r) => ({
     ...summary(r),
     bundle: bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx),
@@ -765,7 +783,7 @@ export function mailLogos(db: DB): Record<string, string> {
  * Tor), so pictures not there yet are on their way; otherwise they wait for the person to ask.
  */
 export function mailMessage(db: DB, key: string, byTor = true): MailMessage | null {
-  const r = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, html, remote, seen FROM inbox WHERE key = ?").get(key) as (Row & { html: string | null; remote: string | null }) | undefined;
+  const r = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, html, remote, seen, mine, cards FROM inbox WHERE key = ?").get(key) as (Row & { html: string | null; remote: string | null }) | undefined;
   if (!r) return null;
   const quote = quoteStart(r.text);
   return { ...summary(r), text: r.text, html: r.html ? mailDocument(withImages(r.html, [])) : null, pictures_pending: !!r.remote && byTor, pictures_ask: !!r.remote && !byTor, ...(quote >= 0 ? { quote_at: quote } : {}) };
