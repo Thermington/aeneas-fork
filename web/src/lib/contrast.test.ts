@@ -92,9 +92,9 @@ describe("design token contrast", () => {
       const placeholder = veil(".mailx-search::placeholder {");
       expect(box.color).toBe("#000000");
       expect(placeholder.color).toBe("#ffffff");
-      // Every button on the bar that has a shade of its own (Reminder, Refresh and the selection's buttons when pointed
+      // Every button on the bar that has a shade of its own (New mail, Refresh and the selection's buttons when pointed
       // at): the bar darkened, as the search box, so their white words read too.
-      for (const rule of [".mailx-newrem {", ".mailx-newrem:hover {", ".mailx-refresh:hover {", ".mailx-selbar button:hover {"]) expect(veil(rule).color, rule).toBe("#000000");
+      for (const rule of [".mailx-compose-btn {", ".mailx-compose-btn:hover {", ".mailx-refresh:hover {", ".mailx-selbar button:hover {"]) expect(veil(rule).color, rule).toBe("#000000");
       for (const id of MAIL) {
         const field = over(box.color, box.part, t[`b-${id}`]);
         expect(contrast("#ffffff", field), `typed words on ${id}`).toBeGreaterThanOrEqual(4.5);

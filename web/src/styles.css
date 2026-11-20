@@ -1242,8 +1242,9 @@ a.mailx-row { color: inherit; text-decoration: none; }
 .mailx-fact .what { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
 .mailx-fact button { flex: none; }
 /* Writing mail (drafts): New mail in the bar; the writing box on an open mail (Reply) or atop the list. */
-.mailx-compose-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 16px; background: rgb(255 255 255 / .16) !important; white-space: nowrap; }
-.mailx-compose-btn:hover, .mailx-compose-btn[aria-expanded="true"] { background: rgb(255 255 255 / .26) !important; }
+.mailx-compose-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 16px; background: rgb(0 0 0 / .2) !important; white-space: nowrap; }
+.mailx-compose-btn:hover { background: rgb(0 0 0 / .32) !important; }
+.mailx-compose-btn[aria-expanded="true"] { background: rgb(0 0 0 / .32) !important; }
 .mailx-compose-btn .mailx-icon { width: 16px; height: 16px; }
 .mailx-compose { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; padding-bottom: 12px; margin-bottom: 12px; background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); padding-right: 12px; }
 .mailx-main > .mailx-compose { padding-left: 12px; }
