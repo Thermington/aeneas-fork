@@ -197,6 +197,10 @@ function wordPattern(words: string[]): RegExp | null {
 const HIRING = ["greenhouse.io", "lever.co", "myworkday.com", "ashbyhq.com", "smartrecruiters.com", "icims.com"];
 /** Social networks' mail domains. */
 const SOCIAL = ["facebookmail.com", "linkedin.com", "instagram.com", "reddit.com", "redditmail.com", "discord.com", "nextdoor.com", "x.com"];
+/** Developer and work tools: their notices carry an unsubscribe link (to stop a repository's notices), but are not promos. */
+const TOOLS = ["github.com", "gitlab.com", "bitbucket.org", "atlassian.net", "atlassian.com"];
+/** A reply's subject: "Re:" (and "Aw:", "Sv:"). */
+const REPLY = /^\s*(re|aw|sv)\s*:/i;
 /**
  * Phrases that almost only hiring mail has, looked for in the subject and the start of the text: about an application,
  * about the next steps, and the titles in a recruiter's signature. Never single words like "interview" or "position",
@@ -235,8 +239,10 @@ const ORDER_PHRASES = ["estimated arrival", "estimated delivery", "order number"
  *                phrase (ORDER_PHRASES) in the start of the text.
  *  7. social:    the sender's domain is a social network's (facebookmail.com, linkedin.com, instagram.com, reddit.com,
  *                redditmail.com, discord.com, nextdoor.com, x.com).
- *  8. promos:    anything left that carries unsubscribe.
- *  9. other:     anything else a system sent.
+ *  8. other:     a developer or work tool's notice (TOOLS: github.com, gitlab.com, ...), or a reply in a mailing list's
+ *                discussion (a List-Id and a "Re:" subject), though it carries unsubscribe.
+ *  9. promos:    anything left that carries unsubscribe.
+ * 10. other:     anything else a system sent.
  */
 export function bundleOf(mail: BundleMail, ctx: BundleContext): string | null {
   const domain = domainOf(mail.from.address);
@@ -282,6 +288,7 @@ export function bundleOf(mail: BundleMail, ctx: BundleContext): string | null {
   if (hasWord(subject, TRIP_WORDS)) return "trips";
   if (hasWord(subject, PURCHASE_WORDS) || hasWord(start, ORDER_PHRASES)) return "purchases";
   if (fromAny(SOCIAL)) return "social";
+  if (fromAny(TOOLS) || (mail.list_id && REPLY.test(subject))) return "other";
   if (mail.unsubscribe) return "promos";
   return "other";
 }

@@ -143,6 +143,15 @@ test("mail bundles: promos and other", () => {
   assert.equal(bundleOf(sys("security@account.example", "Your password was changed"), NO_MODULES), "other");
 });
 
+test("mail bundles: a developer tool's notice and a list's discussion are other, though they carry unsubscribe", () => {
+  const comment = sys("notifications@github.com", "Re: [alex/notes] Fix the sync (PR #12)", { unsubscribe: true, list_id: "alex/notes <notes.alex.github.com>" });
+  assert.equal(bundleOf(comment, NO_MODULES), "other", "a code host's notice");
+  const list = sys("garden-club@lists.example", "Re: Spring planting day", { unsubscribe: true, list_id: "garden-club.lists.example" });
+  assert.equal(bundleOf(list, NO_MODULES), "other", "a reply in a mailing list's discussion");
+  const news = sys("news@lists.example", "Spring planting day", { unsubscribe: true, list_id: "news.lists.example" });
+  assert.equal(bundleOf(news, NO_MODULES), "promos", "a list's newsletter, not a reply");
+});
+
 test("mail bundles: jobs, from the applications and from hiring systems, a recruiter's own mail too", () => {
   assert.equal(bundleOf(person("Dana Lee", "dana@talent.contoso.example", "Next steps"), ALL), "jobs", "same site as the posting");
   assert.equal(bundleOf(sys("no-reply@fabrikam.example", "Thanks for applying"), ALL), "jobs", "the company's name in the domain");
