@@ -19,6 +19,7 @@ import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MO
 import { fetchBytesViaTor, fetchPublicBytes, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
 import { textCards, type MailCard } from "./mail-cards.js";
+import { buildMessage, checkedNew, checkedText, replyFields } from "./mail-compose.js";
 
 /**
  * The Mail screen's store (CONTRACT.md, Mail): the iCloud Inbox's mail, sorted into bundles, with what the owner did to
@@ -765,6 +766,52 @@ export async function setSeenMany(hub: Hub, keys: string[], seen: boolean): Prom
 export async function setSeen(hub: Hub, key: string, seen: boolean): Promise<{ ok: boolean; synced: boolean }> {
   const r = await setSeenMany(hub, [key], seen);
   return { ok: r.ok === 1, synced: r.synced === 1 };
+}
+
+export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; subject: string; text: string; in_reply_to?: string }
+
+/**
+ * Write mail as a draft (mail-compose.ts): a reply to a kept mail (`reply_to`, its id), or a new mail (`to`, `subject`,
+ * and `from` when several mailboxes are linked). A reply's recipient, subject and thread come from the kept mail, never
+ * from the request. With `preview`, the hub says what it would save and saves nothing (the screen shows the whole mail
+ * before it is saved); otherwise the draft goes to the mailbox's Drafts folder, after any refresh or move that is
+ * running. The owner sends it from their mail app: nothing here sends mail.
+ */
+export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Promise<DraftResult> {
+  const db = hub.mailDb;
+  const text = checkedText(body.text);
+  let account: string | undefined;
+  let fields: ReturnType<typeof replyFields>;
+  if (body.reply_to !== undefined) {
+    if (typeof body.reply_to !== "string") throw new StoreError(422, "reply_to is a mail's id");
+    const r = db.prepare("SELECT account, from_address, subject, message_id, refs, mine FROM inbox WHERE key = ?").get(body.reply_to) as { account: string; from_address: string; subject: string; message_id: string | null; refs: string | null; mine: number } | undefined;
+    if (!r) throw new StoreError(404, "that message is not kept (it left the Inbox)");
+    if (r.mine) throw new StoreError(422, "that is your own reply: answer the other person's mail in the thread");
+    let refs: string[] = [];
+    try { refs = r.refs ? (JSON.parse(r.refs) as unknown[]).filter((x): x is string => typeof x === "string") : []; } catch { /* none */ }
+    account = r.account;
+    fields = replyFields({ from_address: r.from_address, subject: r.subject, message_id: r.message_id, refs });
+  } else {
+    fields = checkedNew(body);
+    const all = INBOX_SOURCES.flatMap((s) => s.accounts(hub));
+    const from = typeof body.from === "string" ? body.from.trim().toLowerCase() : "";
+    account = from ? all.find((a) => a.slice(a.indexOf(":") + 1) === from) : all[0];
+    if (!account) throw new StoreError(from ? 422 : 409, from ? "that address is not a linked mailbox" : "link an iCloud mailbox first");
+  }
+  const source = sourceOf(account);
+  if (!source?.saveDraft) throw new StoreError(409, "this mailbox cannot keep drafts from Aeneas");
+  const name = hub.profile.get().name.trim();
+  const from: MailAddress = { name: name && name !== "the owner" ? name : "", address: account.slice(account.indexOf(":") + 1) };
+  const out: DraftResult = { saved: false, from, to: fields.to, subject: fields.subject, text, ...(fields.in_reply_to ? { in_reply_to: fields.in_reply_to } : {}) };
+  if (body.preview === true) return out;
+  const { raw } = buildMessage({ from, text, ...fields });
+  const label = mailboxLabel(hub, account);
+  await exclusive(hub, () => source.saveDraft!(hub, account!, raw)).catch((e) => {
+    console.error(`[mail-inbox] ${label}: draft not saved ${errCode(e)}`);
+    throw e;
+  });
+  console.log(`[mail-inbox] ${label}: 1 draft saved`);
+  return { ...out, saved: true };
 }
 
 /** Pin or unpin a kept mail: it stays where it is in the list, shows with a pin, and Sweep passes it by. */

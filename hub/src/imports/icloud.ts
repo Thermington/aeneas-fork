@@ -747,6 +747,39 @@ export async function setSeenICloud(hub: Hub, accountKey: string, refs: MoveRef[
   });
 }
 
+/**
+ * What saveDraftICloud may ask of a server, and only it: APPEND one message to a folder, flagged `\Draft` and `\Seen`
+ * (a draft is the owner's own, not new mail). The type takes no other flag, and nothing here opens, changes or deletes
+ * a message that is there.
+ */
+export interface ImapDrafter {
+  append(path: string, content: Buffer, flags: ["\\Draft", "\\Seen"]): Promise<{ uid?: number } | false>;
+}
+/** A draft is at most this big (the text is capped at 50,000 characters; base64 and headers add to it). */
+export const DRAFT_BYTES = 400_000;
+
+/**
+ * Save a draft (mail-compose.ts built it) to the folder iCloud marks `\Drafts`: the Mail screen's third write, and the
+ * only one that adds a message. Only that folder, only APPEND; the owner sends it from Apple Mail, and nothing here
+ * sends mail.
+ */
+export async function saveDraftICloud(hub: Hub, accountKey: string, raw: Buffer): Promise<void> {
+  if (raw.length > DRAFT_BYTES) throw new StoreError(413, "the draft is too big to save");
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  await withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    const w = c as unknown as ImapClient & ImapDrafter;
+    if (typeof w.append !== "function") throw new StoreError(502, "iCloud did not offer to save a draft, so nothing was saved.");
+    const drafts = (await c.list()).find((f) => f.specialUse === "\\Drafts" && !f.flags.has("\\Noselect"));
+    if (!drafts) throw new StoreError(409, "This mailbox has no Drafts folder in iCloud, so the draft was not saved.");
+    if (!(await w.append(drafts.path, raw, ["\\Draft", "\\Seen"]))) throw new StoreError(502, "iCloud did not take the draft.");
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+}
+
 /** Opens the message in Apple Mail (Mac, iPhone, iPad) by its Message-ID; iCloud Mail on the web when it has none. */
 export function icloudLink(ref: MailRef): string {
   const mid = ref.message_id?.trim().replace(/^<|>$/g, "");
@@ -770,4 +803,5 @@ export const icloudInbox: InboxSource = {
   list: (hub, account, since, known, knownMessage, opts) => listInboxICloud(hub, account, since, known, knownMessage, opts),
   move: (hub, account, refs, to) => moveICloud(hub, account, refs, to),
   setSeen: (hub, account, refs, seen) => setSeenICloud(hub, account, refs, seen),
+  saveDraft: (hub, account, raw) => saveDraftICloud(hub, account, raw),
 };

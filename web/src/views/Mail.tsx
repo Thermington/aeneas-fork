@@ -21,6 +21,7 @@ import {
   cardLine,
   cardLink,
   type MailCard,
+  type MailDraft,
   bundleOf,
   deliveryAt,
   dueReminders,
@@ -131,6 +132,7 @@ export function Mail() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [help, setHelp] = useState(false);
+  const [composing, setComposing] = useState(false);
   const [multiSnooze, setMultiSnooze] = useState(false);
   const anchor = useRef<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -372,6 +374,7 @@ export function Mail() {
         )}
         {!chosen.length && (
           <div className="mailx-bar-right">
+            <button type="button" className="mailx-compose-btn" aria-expanded={composing} onClick={() => setComposing((x) => !x)} title="Write a new mail, saved to Drafts in iCloud"><Icon name="pencil" /><span>New mail</span></button>
           </div>
         )}
       </div>
@@ -392,6 +395,7 @@ export function Mail() {
         {menu && <div className="mailx-scrim" onClick={() => setMenu(false)} aria-hidden="true" />}
         <div className="mailx-main">
           {actErr && <div className="error mailx-acterr" role="alert">{actErr}</div>}
+          {composing && <Composer close={() => setComposing(false)} />}
           {refreshMsg && <div className={`small mailx-refreshmsg ${refreshMsg.ok ? "ok" : "error"}`} role="status">{refreshMsg.text}</div>}
           {help && (
             <div className="mailx-help" role="dialog" aria-label="Keyboard keys">
@@ -996,6 +1000,9 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [m.id]);
   const single = m.members.length === 1;
+  // Reply answers the thread's newest mail from someone else (never the owner's own reply).
+  const answer = [...m.members].reverse().find((x) => !x.mine);
+  const [replying, setReplying] = useState(false);
   return (
     <article className={`mailx-card${picked ? " picked" : ""}`} data-nav={m.id}>
       {/* As on a row: the circle turns into a checkbox when pointed at, or while anything is selected. */}
@@ -1012,13 +1019,89 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
       </button>
       <div className="mailx-card-acts mailx-card-pad"><DoneButton m={m} labelled /><SnoozeButton m={m} labelled /><PinButton m={m} labelled />
         <button type="button" className="mailx-act" title="Mark unread, here and in your mail app" onClick={() => { close(); void act((c) => c.mailSeen(m.id, false)); }}><Icon name="dot" /><span>Mark unread</span></button>
+        {answer && <button type="button" className={`mailx-act${replying ? " on" : ""}`} aria-expanded={replying} title="Write a reply, saved to Drafts in iCloud" onClick={() => setReplying((x) => !x)}><Icon name="reply" /><span>Reply</span></button>}
       </div>
+      {replying && answer && <Composer reply={answer} close={() => setReplying(false)} />}
       {m.state === "snoozed" && m.snooze_until && <div className="muted small mailx-card-pad">Snoozed until {fmtDateTime(m.snooze_until)}. It comes back to the top of your Inbox then; its task, called Snoozed mail, is in Tasks and Reminders.</div>}
       {snoozeFor === m.id && <SnoozePicker m={m} />}
       {single ? <Message m={m.members[0]} /> : m.members.map((x, i) => (
         <ThreadMessage key={x.id} m={x} startOpen={i === m.members.length - 1 || openUnread.has(x.id)} />
       ))}
     </article>
+  );
+}
+
+/**
+ * Writing mail, as a draft: a reply to an open mail (the hub sets its recipient, the sender's From; its subject and its
+ * thread) or a new mail. Write, then Preview: the hub answers with the whole mail it would save, shown here as text,
+ * and only Save to Drafts saves it, to iCloud's Drafts folder. The owner sends it from Apple Mail: nothing is sent here.
+ */
+function Composer({ reply, close }: { reply?: MailSummary; close: () => void }) {
+  const [to, setTo] = useState("");
+  const [subject, setSubject] = useState("");
+  const [text, setText] = useState("");
+  const [preview, setPreview] = useState<MailDraft | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const ask = async (asPreview: boolean) => {
+    const c = engine.client;
+    if (!c) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await c.mailDraft({ ...(reply ? { reply_to: reply.id } : { to, subject }), text, ...(asPreview ? { preview: true } : {}) });
+      if (asPreview) setPreview(r); else setSaved(true);
+    } catch (e) { setErr(plainError(e)); }
+    setBusy(false);
+  };
+  const head = reply ? <>Reply to <b>{personLabel(reply.from)}</b> &lt;{reply.from.address}&gt;</> : <b>New mail</b>;
+  if (saved) {
+    return (
+      <div className="mailx-compose mailx-card-pad" role="status">
+        <span>Saved to Drafts in iCloud. Open Drafts in Apple Mail to send it.</span>
+        <button type="button" className="small" onClick={close}>Close</button>
+      </div>
+    );
+  }
+  if (preview) {
+    return (
+      <div className="mailx-compose mailx-card-pad" role="group" aria-label="The mail as it will be saved">
+        <div className="muted small">This is the whole mail. Save it to Drafts, then send it from Apple Mail.</div>
+        <dl className="mailx-compose-head">
+          <dt>From</dt><dd>{preview.from.name ? `${preview.from.name} <${preview.from.address}>` : preview.from.address}</dd>
+          <dt>To</dt><dd>{preview.to.join(", ")}</dd>
+          <dt>Subject</dt><dd>{preview.subject || "(no subject)"}</dd>
+        </dl>
+        <div className="mailx-compose-text">{preview.text}</div>
+        <div className="mailx-compose-acts">
+          <button type="button" className="primary" disabled={busy} onClick={() => void ask(false)}>{busy ? "Saving" : "Save to Drafts"}</button>
+          <button type="button" disabled={busy} onClick={() => setPreview(null)}>Edit</button>
+          <button type="button" className="link" onClick={close}>Discard</button>
+          {err && <span className="error small" role="alert">{err}</span>}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <form className="mailx-compose mailx-card-pad" onSubmit={(e) => { e.preventDefault(); void ask(true); }}>
+      <div>{head}</div>
+      {/* The sender asked for replies to go elsewhere: say so, since the reply goes to the address it came from. */}
+      {reply?.reply_to && <div className="warn small">This mail asks for replies to go to {reply.reply_to}. Your reply goes to the address it came from, {reply.from.address}.</div>}
+      {!reply && (
+        <>
+          <input value={to} onChange={(e) => setTo(e.target.value)} placeholder="To: alex@example.com" aria-label="To" autoComplete="off" spellCheck={false} />
+          <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" aria-label="Subject" maxLength={200} />
+        </>
+      )}
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder="Write your mail" aria-label="Your mail" maxLength={50000} autoFocus />
+      <div className="mailx-compose-acts">
+        <button type="submit" className="primary" disabled={busy || !text.trim() || (!reply && !to.trim())}>{busy ? "Checking" : "Preview"}</button>
+        <button type="button" className="link" onClick={close}>Discard</button>
+        <span className="muted small">Saved to Drafts in iCloud, to send from Apple Mail.</span>
+        {err && <span className="error small" role="alert">{err}</span>}
+      </div>
+    </form>
   );
 }
 
@@ -1232,6 +1315,7 @@ const ICONS: Record<string, string> = {
   refresh: "M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4",
   plus: "M12 5v14M5 12h14",
   pencil: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
+  reply: "M9 15l-5-5 5-5M4 10h10a6 6 0 0 1 6 6v3",
   own: "M7 4h10v16l-5-4-5 4z",
   dot: "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z",
   pin: "M9 4h6l-1 6 3 3H7l3-3zM12 13v7",

@@ -279,6 +279,13 @@ export function frameLink(href: string | null): string | null {
     return (u.protocol === "https:" || u.protocol === "http:") && u.hostname ? u.toString() : null;
   } catch { return null; }
 }
+/**
+ * A draft to write (POST /mail/drafts): a reply (`reply_to`, a mail's id: the hub sets its recipient, subject and
+ * thread) or a new mail (`to`, `subject`). `preview`: the hub says what it would save, and saves nothing.
+ */
+export type MailDraftRequest = ({ reply_to: string } | { to: string; subject: string }) & { text: string; preview?: boolean };
+/** What the hub saved to Drafts (or, for a preview, would save). */
+export interface MailDraft { saved: boolean; from: MailAddress; to: string[]; subject: string; text: string; in_reply_to?: string }
 /** `more`: the last refresh left new mail for the next one (a big Inbox comes in batches). */
 export interface MailMailbox { email: string; last_refresh: string | null; last_error: string | null; more: boolean }
 /** What Done or Undo did: the mails moved, how many were not, and the hub's words when some were not. */

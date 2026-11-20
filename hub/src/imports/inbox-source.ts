@@ -9,7 +9,8 @@ import type { MailCard } from "../mail-cards.js";
  *
  * A source must keep to what iCloud's does: list the Inbox (and the owner's replies to it) without marking anything read, fetch only what it lists
  * (text, the HTML for showing, pictures sent inside a mail), and change the mailbox only by moving a kept message
- * between the Inbox and the archive, or by marking one read or unread, after checking it is still that message.
+ * between the Inbox and the archive, or by marking one read or unread, after checking it is still that message, and by
+ * adding a draft the owner wrote to its Drafts folder (never sending one).
  */
 
 export interface MailAddress { name: string; address: string }
@@ -73,4 +74,6 @@ export interface InboxSource {
   move(hub: Hub, account: string, refs: MoveRef[], to: "archive" | "inbox"): Promise<Map<string, string | null>>;
   /** Mark a kept message read or unread in the mailbox, after checking it is still that message; false when it was not. */
   setSeen(hub: Hub, account: string, refs: MoveRef[], seen: boolean): Promise<boolean[]>;
+  /** Save a draft (an RFC 5322 message, mail-compose.ts) to the mailbox's Drafts folder; it throws when not saved. Never sends. */
+  saveDraft?(hub: Hub, account: string, raw: Buffer): Promise<void>;
 }

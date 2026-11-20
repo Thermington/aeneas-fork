@@ -40,7 +40,7 @@ export const FOLDERS: ImapFolder[] = [
 
 /** A fake iCloud for the Mail screen: folders, messages, and a record of every call and query. */
 export function fake(messages: Msg[], opts: { password?: string; noMove?: boolean } = {}) {
-  const seen = { connects: 0, logouts: 0, calls: [] as string[], opened: [] as { path: string; readOnly: unknown }[], fetches: [] as unknown[], searches: [] as Record<string, unknown>[], moves: [] as { from: string; uid: number; to: string }[], flags: [] as { uid: number; flags: string[]; add: boolean }[] };
+  const seen = { connects: 0, logouts: 0, calls: [] as string[], opened: [] as { path: string; readOnly: unknown }[], fetches: [] as unknown[], searches: [] as Record<string, unknown>[], moves: [] as { from: string; uid: number; to: string }[], flags: [] as { uid: number; flags: string[]; add: boolean }[], appends: [] as { path: string; raw: string; flags: string[] }[] };
   setImapFactory((login) => {
     let open: string | null = null;
     const find = (uid: string) => messages.find((m) => m.folder === open && String(m.uid) === uid);
@@ -87,6 +87,11 @@ export function fake(messages: Msg[], opts: { password?: string; noMove?: boolea
         async messageFlagsRemove(uid: string, flags: string[]) {
           seen.calls.push("messageFlagsRemove"); seen.flags.push({ uid: Number(uid), flags, add: false });
           const m = find(uid); if (m) m.seen = false; return !!m;
+        },
+        /** APPEND: a draft the Mail screen saved, recorded as sent to the server. */
+        async append(path: string, content: Buffer, flags: string[]) {
+          seen.calls.push("append"); seen.appends.push({ path, raw: content.toString(), flags });
+          return { uid: seen.appends.length };
         },
         capabilities: new Map<string, unknown>(opts.noMove ? [] : [["MOVE", true], ["UIDPLUS", true]]),
         /** MOVE: the message goes to the destination folder under the next UID there. */

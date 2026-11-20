@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { bundleDelivery, listMail, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { bundleDelivery, listMail, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -73,6 +73,10 @@ export function mailRoutes() {
     if (!r2.ok) throw new StoreError(404, "that message is not kept (it left the Inbox)");
     return c.json({ ok: true, seen: body.seen, synced: r2.synced });
   });
+
+  // A draft (a reply or a new mail): with preview, what would be saved; else saved to the mailbox's Drafts folder.
+  // Nothing is sent: the owner sends it from their mail app.
+  r.post("/mail/drafts", async (c) => c.json(await saveMailDraft(c.get("hub"), await readJsonObject(c))));
 
   // Pin: on the hub only; nothing changes in iCloud.
   r.post("/mail/messages/:id/pin", async (c) => {
