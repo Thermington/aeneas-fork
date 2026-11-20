@@ -1119,7 +1119,9 @@ a.mailx-row { color: inherit; text-decoration: none; }
 /* Selecting: a row's circle becomes a checkbox when pointed at, and on every row while anything is selected. */
 /* Exactly over the circle: the same 34px, at the circle's place (6px row padding, the 8px dot column, the row's 12px gap). */
 .mailx-pick { position: absolute; left: 26px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; box-sizing: border-box; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid var(--border); background: var(--mail-item); color: #fff; display: none; place-items: center; z-index: 1; cursor: pointer; }
-.mailx-item:hover .mailx-pick, .mailx.selecting .mailx-pick, .mailx-item.picked .mailx-pick { display: grid; }
+/* Seen only when the circle itself is pointed at (it is the only part that selects), or while anything is selected. */
+.mailx-pick { display: grid; opacity: 0; transition: opacity .1s; }
+.mailx-pick:hover, .mailx-pick:focus-visible, .mailx.selecting .mailx-pick, .mailx-item.picked .mailx-pick, .mailx-card.picked > .mailx-pick { opacity: 1; }
 /* Not picked: a dim checkmark in a darker ring, so it reads as a checkbox; brighter when pointed at; picked: full color. */
 .mailx-pick { color: var(--muted); border-color: var(--muted); }
 .mailx-pick .mailx-icon { opacity: .4; stroke-width: 2.4; }
@@ -1130,11 +1132,10 @@ a.mailx-row { color: inherit; text-decoration: none; }
 /* An open mail: the checkbox over its header's circle (14px in, 14px down), shown when its header is pointed at. */
 .mailx-card { position: relative; }
 .mailx-card > .mailx-pick { left: 14px; top: 14px; transform: none; }
-.mailx-card:has(> .mailx-card-head:hover) > .mailx-pick, .mailx-card > .mailx-pick:hover, .mailx.selecting .mailx-card > .mailx-pick, .mailx-card.picked > .mailx-pick { display: grid; }
 .mailx-card.picked > .mailx-pick { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .mailx-card.picked > .mailx-pick .mailx-icon { opacity: 1; color: #fff; }
 .mailx-item.picked { background: color-mix(in srgb, var(--accent) 8%, var(--mail-item)); }
-@media (hover: none) { .mailx-item:hover .mailx-pick { display: none; } .mailx.selecting .mailx-pick, .mailx-item.picked .mailx-pick { display: grid; } }
+@media (hover: none) { .mailx-pick { display: none; } .mailx.selecting .mailx-pick, .mailx-item.picked .mailx-pick, .mailx-card.picked > .mailx-pick { display: grid; opacity: 1; } }
 .mailx-selbar { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; flex-wrap: wrap; }
 .mailx-selbar h1 { margin-right: 10px; }
 .mailx-selbar button { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius); }
