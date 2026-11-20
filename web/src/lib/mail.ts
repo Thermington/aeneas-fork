@@ -58,6 +58,20 @@ export function cardLine(c: MailCard): string {
   return parts.filter((x): x is string => !!x).join(" · ");
 }
 
+/**
+ * A touch on a row, once it has moved: sideways (`h`, a swipe) or up and down (`v`, the list scrolls), or null while it
+ * has moved under 10px. Sideways only when clearly so (half again as much across as down), so scrolling never swipes.
+ */
+export function swipeLock(dx: number, dy: number): "h" | "v" | null {
+  if (Math.hypot(dx, dy) < 10) return null;
+  return Math.abs(dx) > Math.abs(dy) * 1.5 ? "h" : "v";
+}
+/** What a swipe let go at `dx` does on a row `width` wide: right far enough is Done, left is Snooze, else nothing. */
+export function swipeAction(dx: number, width: number): "done" | "snooze" | null {
+  const far = Math.min(120, width * 0.35);
+  return dx >= far ? "done" : dx <= -far ? "snooze" : null;
+}
+
 /** Where a card's Track or Open button goes: its https link, checked here again, or null. */
 export const cardLink = (c: MailCard): string | null => (c.url ? httpsLink(c.url)?.href ?? null : null);
 

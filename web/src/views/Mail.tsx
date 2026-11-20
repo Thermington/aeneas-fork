@@ -1,11 +1,10 @@
-import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from "react";
 import { openExternal } from "../tauri/bridge";
 import { engine } from "../sync/engine";
 import { isTypingTarget } from "../lib/keys";
 import { useEntities } from "../sync/hooks";
 import type { Entity } from "@everythingapp/shared";
 import { completeTask, snoozeReminder } from "../sync/actions";
-import { createEntity } from "../sync/edits";
 import { usePoll } from "../lib/usePoll";
 import { useModules } from "../lib/modules";
 import { plainError } from "../lib/errors";
@@ -13,6 +12,8 @@ import { fmtDateTime } from "../lib/time";
 import {
   bundleClass,
   CARD_ICON,
+  swipeAction,
+  swipeLock,
   cardLine,
   cardLink,
   type MailCard,
@@ -117,7 +118,6 @@ export function Mail() {
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => { const t = setInterval(() => setClock(Date.now()), 60_000); return () => clearInterval(t); }, []);
   const reminders = useMemo(() => dueReminders(tasks, new Date(clock)), [tasks, clock]);
-  const [newReminder, setNewReminder] = useState(false);
   const [remindFor, setRemindFor] = useState<string | null>(null);
   const delivery = list.data?.bundle_delivery ?? {};
   // Search: a thread shows when any of its messages has every word.
@@ -368,7 +368,6 @@ export function Mail() {
         )}
         {!chosen.length && (
           <div className="mailx-bar-right">
-            <button type="button" className="mailx-newrem" aria-expanded={newReminder} onClick={() => setNewReminder((x) => !x)} title="A reminder, saved as a task"><Icon name="plus" /><span>Reminder</span></button>
           </div>
         )}
       </div>
@@ -389,7 +388,6 @@ export function Mail() {
         {menu && <div className="mailx-scrim" onClick={() => setMenu(false)} aria-hidden="true" />}
         <div className="mailx-main">
           {actErr && <div className="error mailx-acterr" role="alert">{actErr}</div>}
-          {newReminder && <NewReminder close={() => setNewReminder(false)} />}
           {refreshMsg && <div className={`small mailx-refreshmsg ${refreshMsg.ok ? "ok" : "error"}`} role="status">{refreshMsg.text}</div>}
           {help && (
             <div className="mailx-help" role="dialog" aria-label="Keyboard keys">
@@ -566,34 +564,6 @@ function ReminderRow({ r, task, picking, setPicking }: { r: DueReminder; task: E
   );
 }
 
-/** A new reminder from Mail: a title and a time, saved as a task like any other (Tasks, Reminders, its notification). */
-function NewReminder({ close }: { close: () => void }) {
-  const soon = new Date(Date.now() + 3600_000);
-  soon.setMinutes(0, 0, 0);
-  const local = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-  const [title, setTitle] = useState("");
-  const [at, setAt] = useState(local(soon));
-  const [err, setErr] = useState("");
-  const save = async () => {
-    const when = new Date(at);
-    if (!title.trim() || Number.isNaN(when.getTime())) return;
-    try {
-      await createEntity("task", { title: title.trim().slice(0, 200), status: "scheduled", order: Date.now(), remind_at: when.toISOString(), friction: "none" });
-      close();
-    } catch (e) { setErr(plainError(e)); }
-  };
-  return (
-    <form className="mailx-newreminder" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-      <b>New reminder</b>
-      <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Call the dentist" maxLength={200} autoFocus aria-label="What to remember" />
-      <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} aria-label="When" />
-      <button type="submit" disabled={!title.trim()}>Save</button>
-      <button type="button" className="link" onClick={close}>Cancel</button>
-      {err && <span className="error small">{err}</span>}
-    </form>
-  );
-}
-
 function Flat({ messages, view, bundle, open, setOpen, edit }: { messages: MailThread[]; view: MailView; bundle: Bundle | null; open: string | null; setOpen: (id: string | null) => void; edit?: () => void }) {
   const editButton = edit && <button type="button" className="mailx-act mailx-editbundle" onClick={edit}><Icon name="pencil" /><span>Edit bundle</span></button>;
   if (!messages.length) {
@@ -749,18 +719,65 @@ function BundleRow({ b, nav, mails, isOpen, toggle, open, setOpen }: { b: Bundle
   );
 }
 
+/**
+ * Swiping a row on a touch screen: right for Done (Move to Inbox in Done), left for Snooze (null: none). Only touch, never
+ * a mouse; the row keeps `touch-action: pan-y`, so the list still scrolls and a sideways move comes here. A swipe let go
+ * short of swipeAction's distance slides back, and the tap that ends a swipe does not open the mail.
+ */
+function useSwipe(on: boolean, done: () => void, snooze: (() => void) | null) {
+  const [dx, setDx] = useState(0);
+  const at = useRef<{ x: number; y: number; id: number; lock: "h" | "v" | null; dx: number; w: number } | null>(null);
+  const swiped = useRef(false);
+  const handlers = on ? {
+    onPointerDown: (e: RPointerEvent<HTMLElement>) => {
+      if (e.pointerType !== "touch") return;
+      at.current = { x: e.clientX, y: e.clientY, id: e.pointerId, lock: null, dx: 0, w: e.currentTarget.offsetWidth };
+    },
+    onPointerMove: (e: RPointerEvent<HTMLElement>) => {
+      const s = at.current;
+      if (!s || e.pointerId !== s.id) return;
+      const x = e.clientX - s.x;
+      if (!s.lock) { s.lock = swipeLock(x, e.clientY - s.y); if (s.lock === "h") e.currentTarget.setPointerCapture(e.pointerId); }
+      if (s.lock !== "h") return;
+      s.dx = x < 0 && !snooze ? 0 : x;
+      setDx(s.dx);
+    },
+    onPointerUp: () => {
+      const s = at.current;
+      at.current = null;
+      if (!s || s.lock !== "h") return;
+      swiped.current = true;
+      setDx(0);
+      const a = swipeAction(s.dx, s.w);
+      if (a === "done") done();
+      else if (a === "snooze") snooze?.();
+    },
+    onPointerCancel: () => { at.current = null; setDx(0); },
+    onClickCapture: (e: RMouseEvent) => { if (swiped.current) { swiped.current = false; e.preventDefault(); e.stopPropagation(); } },
+  } : {};
+  return { dx, handlers };
+}
+
 function Row({ m, open, setOpen }: { m: MailThread; open: boolean; setOpen: (id: string | null) => void }) {
-  const { cursor, selected, pick } = useContext(Look);
+  const { cursor, selected, pick, move, setSnoozeFor, openMail } = useContext(Look);
+  const back = m.state === "done";
+  const swipe = useSwipe(!open && selected.size === 0,
+    () => void move(back ? m.ids.done : m.ids.open, back ? "inbox" : "done"),
+    back ? null : () => { setSnoozeFor(m.id); openMail(m.id); });
   if (open) return <Card m={m} close={() => setOpen(null)} />;
   const picked = selected.has(m.id);
-  // The row opens the mail; its actions show when it is pointed at or tabbed to (on a phone, open the mail for them).
-  // Its circle turns into a checkbox when pointed at, or while anything is selected.
+  const dx = swipe.dx;
+  const armed = swipeAction(dx, 400) !== null;
+  // The row opens the mail; its actions show when it is pointed at or tabbed to (on a phone, open the mail for them,
+  // or swipe). Its circle turns into a checkbox when pointed at, or while anything is selected.
   return (
-    <div className={`mailx-item${cursor === m.id ? " cursor" : ""}${picked ? " picked" : ""}`} data-nav={m.id}>
+    <div className={`mailx-item${cursor === m.id ? " cursor" : ""}${picked ? " picked" : ""}${dx ? " swiping" : ""}`} data-nav={m.id} {...swipe.handlers}>
+      {dx > 0 && <span className={`mailx-swipe done${armed ? " armed" : ""}`} aria-hidden="true"><Icon name={back ? "inbox" : "check"} />{back ? "Move to Inbox" : "Done"}</span>}
+      {dx < 0 && <span className={`mailx-swipe snooze${armed ? " armed" : ""}`} aria-hidden="true">Snooze<Icon name="clock" /></span>}
       <button type="button" className="mailx-pick" role="checkbox" aria-checked={picked} aria-label={`Select ${m.subject || "this mail"}`} onClick={(e) => pick(m.id, e.shiftKey)}>
         <Icon name="check" />
       </button>
-      <button type="button" className={`mailx-row${isUnread(m) ? " unread" : ""}`} onClick={() => setOpen(m.id)}>
+      <button type="button" className={`mailx-row${isUnread(m) ? " unread" : ""}`} style={dx ? { transform: `translateX(${dx}px)` } : undefined} onClick={() => setOpen(m.id)}>
         <span className="mailx-dotcol">{isUnread(m) && <span className="mailx-dot" title="Unread" />}</span>
         <Avatar m={m} />
         <span className="mailx-what">

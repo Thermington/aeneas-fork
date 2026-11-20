@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -330,5 +330,24 @@ describe("mail cards", () => {
     expect(cardLink({ kind: "package", source: "sender", url: "javascript:alert(1)" })).toBeNull();
     expect(cardLink({ kind: "package", source: "sender", url: "https://a:b@track.example/1" })).toBeNull();
     expect(cardLink({ kind: "package", source: "text" })).toBeNull();
+  });
+});
+
+describe("mail swipes", () => {
+  it("is a swipe only once it moves clearly sideways, so scrolling never swipes", () => {
+    expect(swipeLock(6, 2)).toBeNull();
+    expect(swipeLock(30, 5)).toBe("h");
+    expect(swipeLock(-30, 5)).toBe("h");
+    expect(swipeLock(20, 18)).toBe("v");
+    expect(swipeLock(2, 40)).toBe("v");
+  });
+
+  it("acts only when let go far enough: right is Done, left is Snooze", () => {
+    expect(swipeAction(130, 375)).toBe("done");
+    expect(swipeAction(-130, 375)).toBe("snooze");
+    expect(swipeAction(80, 375)).toBeNull();
+    expect(swipeAction(-80, 375)).toBeNull();
+    expect(swipeAction(75, 200)).toBe("done");
+    expect(swipeAction(60, 200)).toBeNull();
   });
 });

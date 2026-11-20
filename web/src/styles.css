@@ -1085,7 +1085,20 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .pinmark { color: var(--link); display: flex; }
 .pinmark .mailx-icon { width: 14px; height: 14px; }
 /* A row's actions: over its time, when the row is pointed at or tabbed to. */
-.mailx-item { position: relative; }
+.mailx-item { position: relative; touch-action: pan-y; }
+/*
+ * Swiping a row (touch only): the row slides over a panel in Done's color (right) or Snoozed's (left), full strength
+ * once far enough to act; let go, it slides back.
+ */
+.mailx-row { transition: transform .18s ease-out; }
+.mailx-item.swiping { overflow: hidden; }
+.mailx-item.swiping .mailx-row { position: relative; z-index: 1; background: var(--mail-item); transition: none; }
+.mailx-item.swiping .mailx-pick, .mailx-item.swiping .mailx-acts { visibility: hidden; }
+.mailx-swipe { position: absolute; inset: 0; display: flex; align-items: center; gap: 8px; padding: 0 20px; color: #fff; font-weight: 600; opacity: .7; }
+.mailx-swipe.done { background: var(--b-done); justify-content: flex-start; }
+.mailx-swipe.snooze { background: var(--b-snoozed); justify-content: flex-end; }
+.mailx-swipe.armed { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .mailx-row { transition: none; } }
 .mailx-acts { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: none; gap: 2px; background: var(--surface-2); border-radius: var(--radius); padding: 2px; }
 .mailx-item:hover .mailx-acts, .mailx-item:focus-within .mailx-acts { display: flex; }
 .mailx-act { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; border-radius: var(--radius); padding: 6px 8px; min-height: 0; color: var(--muted); cursor: pointer; font: inherit; font-size: 13px; }
@@ -1100,11 +1113,6 @@ a.mailx-row { color: inherit; text-decoration: none; }
 .mailx-av.reminder { background: var(--b-snoozed); color: #fff; border-color: transparent; }
 .mailx-item.reminder .line { color: var(--b-snoozed); }
 .mailx-remsnooze { padding: 4px 12px 12px 74px; }
-.mailx-newrem { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border-radius: 16px; background: rgb(0 0 0 / .2) !important; }
-.mailx-newrem:hover { background: rgb(0 0 0 / .32) !important; }
-.mailx-newreminder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; margin-bottom: 12px; background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); }
-.mailx-newreminder input:first-of-type { flex: 1; min-width: 180px; }
-.mailx-newreminder button.link { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; }
 .mailx-notify { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 0; color: var(--muted); }
 /* The side list's bottom: Refresh, Keyboard keys, and "i", which opens the mailboxes and settings. */
 .mailx-boxes .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
