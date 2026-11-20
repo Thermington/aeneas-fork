@@ -45,10 +45,59 @@ public struct ModuleInfo: Codable, Equatable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// One kind of alert the hub announces, switched on or off on its own, once for every device (`alerts` in
+/// `GET /modules`, since 2026-11-20). `id` stays a string so a kind a newer hub adds decodes and shows in Settings.
+public struct AlertInfo: Codable, Equatable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var title: String
+    public var summary: String
+    /// The id of the module the alert belongs to: Settings leaves the alert out while that module is off. Nil for an
+    /// alert of no module (activity check-ins, the hub's disk).
+    public var module: String?
+    public var on: Bool
+
+    public init(id: String, title: String, summary: String = "", module: String? = nil, on: Bool = true) {
+        self.id = id; self.title = title; self.summary = summary; self.module = module; self.on = on
+    }
+
+    // Only the id is needed to switch a kind; the rest falls back so a thinner answer still decodes. A kind with no
+    // `on` is on, as every kind is until it is switched off.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        on = (try? c.decodeIfPresent(Bool.self, forKey: .on)) ?? true
+        title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? id
+        summary = (try? c.decodeIfPresent(String.self, forKey: .summary)) ?? ""
+        module = try? c.decodeIfPresent(String.self, forKey: .module)
+    }
+}
+
+/// The kinds of alert the hub lists today (`ALERT_KINDS` in the hub's alerts.ts). This device plans or shows some of
+/// them with no event from the hub (a reminder's notification, the check-in three hours into an activity), so it
+/// has to obey their switches itself; the hub holds back the rest before they reach a device.
+public enum AlertKind: String, CaseIterable, Sendable {
+    case reminder, digest, activity, mail, monitor, sensor, disk, quiz
+}
+
 /// `GET /modules`, `PUT /modules` and the `modules` event on `/live`.
 public struct ModulesResponse: Codable, Equatable, Sendable {
     public var modules: [ModuleInfo]
-    public init(modules: [ModuleInfo]) { self.modules = modules }
+    /// The alert switches (since 2026-11-20). Nil from an older hub: every kind is on and Settings lists none.
+    public var alerts: [AlertInfo]?
+    public init(modules: [ModuleInfo], alerts: [AlertInfo]? = nil) { self.modules = modules; self.alerts = alerts }
+
+    // Alerts that do not read as a list are left out, as from an older hub, instead of losing the module switches.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        modules = try c.decode([ModuleInfo].self, forKey: .modules)
+        alerts = try? c.decodeIfPresent([AlertInfo].self, forKey: .alerts)
+    }
+}
+
+/// `PUT /modules/alerts`: the whole list as it is now.
+public struct AlertsResponse: Codable, Equatable, Sendable {
+    public var alerts: [AlertInfo]
+    public init(alerts: [AlertInfo]) { self.alerts = alerts }
 }
 
 /// The module ids this app has screens or parts for. Anything else from the hub is only listed in Settings.
@@ -100,6 +149,18 @@ extension Array where Element == ModuleInfo {
     }
 }
 
+extension Array where Element == AlertInfo {
+    /// A kind the hub does not list, or a list that never came (an older hub sends none), means on: no alert goes
+    /// missing because this device knows less than the hub.
+    public func isOn(_ id: String) -> Bool { first { $0.id == id }?.on ?? true }
+    public func isOn(_ k: AlertKind) -> Bool { isOn(k.rawValue) }
+
+    /// For Settings, in the hub's order: an alert whose module is off is left out, since nothing would send it.
+    public func shown(with modules: [ModuleInfo]) -> [AlertInfo] {
+        filter { a in a.module.map { modules.isOn($0) } ?? true }
+    }
+}
+
 /// Modules that share a Library area, for the Settings list.
 public struct ModuleGroup: Equatable, Sendable, Identifiable {
     public var title: String
@@ -129,5 +190,16 @@ extension HubClient {
     /// Switch modules on or off; answers with the whole list as it is now.
     public func setModules(_ changes: [String: Bool]) async throws -> [ModuleInfo] {
         try await post("modules", changes, as: ModulesResponse.self, method: "PUT").modules
+    }
+
+    /// The module switches with the alert switches beside them, in one read.
+    public func modulesAndAlerts() async throws -> ModulesResponse {
+        try await get("modules", as: ModulesResponse.self)
+    }
+
+    /// Switch kinds of alert on or off (`{ "<kind>": true | false }`, one or several); answers with the whole list
+    /// as it is now. The hub refuses a kind it does not list (422).
+    public func setAlerts(_ changes: [String: Bool]) async throws -> [AlertInfo] {
+        try await post("modules/alerts", changes, as: AlertsResponse.self, method: "PUT").alerts
     }
 }

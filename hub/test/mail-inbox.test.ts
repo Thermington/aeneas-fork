@@ -17,6 +17,8 @@ function mail(over: Partial<InboxMail> = {}): InboxMail {
   uid++;
   return { id: `7:${uid}:INBOX`, at: hoursAgo(uid), message_id: `m${uid}@example.com`, from: { name: "Alex", address: "alex@example.com" }, reply_to: null, subject: `Mail ${uid}`, text: "Hello there.", automated: false, unsubscribe: false, list_id: null, html: null, remote: [], ...over } as InboxMail;
 }
+/** What a test compares of keepInbox's answer (its `fresh` keys are random). */
+const counts = (r: { kept: number; gone: number; woken: string[] }) => ({ kept: r.kept, gone: r.gone, woken: r.woken });
 const found = (mails: InboxMail[], present: string[] | null = mails.map((m) => m.id), moved: { id: string; message_id: string }[] = []) => ({ present, mails, moved });
 
 function tmpDb() {
@@ -32,8 +34,8 @@ test("mail-inbox: new Inbox mail is kept once, newest first, with a key that nam
   try {
     const a = mail({ subject: "Gutters", text: "Saturday?\n\nAlex", reply_to: "other@example.com", automated: true });
     const b = mail();
-    assert.deepEqual(keepInbox(db, ACCOUNT, found([a, b])), { kept: 2, gone: 0 });
-    assert.deepEqual(keepInbox(db, ACCOUNT, found([a, b])), { kept: 0, gone: 0 }, "not kept twice");
+    assert.deepEqual(counts(keepInbox(db, ACCOUNT, found([a, b]))), { kept: 2, gone: 0, woken: [] });
+    assert.deepEqual(counts(keepInbox(db, ACCOUNT, found([a, b]))), { kept: 0, gone: 0, woken: [] }, "not kept twice");
     assert.ok(isKept(db, ACCOUNT)(a.id));
     assert.ok(isKeptMessage(db, ACCOUNT)(a.message_id!));
     const list = listMail(db);
@@ -58,10 +60,10 @@ test("mail-inbox: mail that left the Inbox goes, however old; done mail in Archi
     keepInbox(db, ACCOUNT, found([old, stays, archived]));
     db.prepare("UPDATE inbox SET state = 'done', id = '7:50:Archive' WHERE id = ?").run(archived.id);
     // The Inbox no longer lists `old` (archived in Apple Mail): it goes. The done one is in Archive: it stays.
-    assert.deepEqual(keepInbox(db, ACCOUNT, found([], [stays.id])), { kept: 0, gone: 1 });
+    assert.deepEqual(counts(keepInbox(db, ACCOUNT, found([], [stays.id]))), { kept: 0, gone: 1, woken: [] });
     assert.deepEqual(state(db).map((r) => r.message_id).sort(), [archived.message_id, stays.message_id].sort());
-    assert.deepEqual(keepInbox(db, ACCOUNT, found([], null)), { kept: 0, gone: 0 }, "a listing without an Inbox removes nothing");
-    assert.deepEqual(keepInbox(db, ACCOUNT, found([], [])), { kept: 0, gone: 1 }, "an empty Inbox: everything left it");
+    assert.deepEqual(counts(keepInbox(db, ACCOUNT, found([], null))), { kept: 0, gone: 0, woken: [] }, "a listing without an Inbox removes nothing");
+    assert.deepEqual(counts(keepInbox(db, ACCOUNT, found([], []))), { kept: 0, gone: 1, woken: [] }, "an empty Inbox: everything left it");
     assert.deepEqual(state(db).map((r) => r.state), ["done"]);
     // Another mailbox's mail is its own.
     keepInbox(db, "icloud:sam@icloud.example", found([mail()]));

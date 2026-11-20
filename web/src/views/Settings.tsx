@@ -21,6 +21,7 @@ import { NavRow, SubPage, Toggle, errorText } from "./settings/common";
 import { ImportPage } from "./settings/Import";
 import { ModulesPage, modulesSummary } from "./settings/Modules";
 import { useModules } from "../lib/modules";
+import { setAlerts, shownAlerts, useAlerts } from "../lib/alerts";
 import { ConnectionsPage, connectionsSummary, useConnections } from "./settings/Connections";
 import { DevicesList, PairDevice } from "./settings/Devices";
 import { LinkChoice } from "./settings/Link";
@@ -351,20 +352,41 @@ function RejectedEdits() {
 function Notifications() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [msg, setMsg] = useState("");
+  const alerts = useAlerts();
+  const modules = useModules();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+  const shown = shownAlerts(alerts.list, modules.on);
   useEffect(() => {
     void notificationsAllowed().then(setAllowed).catch(() => setAllowed(false));
   }, []);
+  const flip = async (id: string, on: boolean) => {
+    setBusy(id);
+    setErr("");
+    try { await setAlerts({ [id]: on }); } catch (e) { setErr(errorText(e)); } finally { setBusy(null); }
+  };
   return (
     <SubPage path="/settings/notifications">
       <div className="card col">
         <h2>What alerts you</h2>
-        <ul className="small plain-list">
-          <li>Reminders when they are due, with Ack and Snooze</li>
-          <li>Check-ins on a long activity</li>
-          <li>Sensors that leave their range and come back</li>
-          <li>Monitors that go down or come back up</li>
-          <li>The morning digest and the evening recall quiz</li>
-        </ul>
+        {alerts.list ? (
+          <>
+            <div className="muted small">Each kind of alert is switched on or off by itself, for every device. Off stops the alert only: the feature it belongs to goes on working.</div>
+            {shown.map((a) => (
+              <Toggle key={a.id} checked={a.on} disabled={busy === a.id} onChange={(v) => void flip(a.id, v)} label={a.title} note={a.summary} />
+            ))}
+            {err && <div className="error" role="alert">{err}</div>}
+          </>
+        ) : (
+          // A hub from before 2026-11-20 has no switches: what it alerts about, as a list.
+          <ul className="small plain-list">
+            <li>Reminders when they are due, with Ack and Snooze</li>
+            <li>Check-ins on a long activity</li>
+            <li>Sensors that leave their range and come back</li>
+            <li>Monitors that go down or come back up</li>
+            <li>The morning digest and the evening recall quiz</li>
+          </ul>
+        )}
         <div className="muted small">
           {isWindowsApp ? "They show as banners in the app and as Windows notifications." : "In a browser they show as banners at the top of the app while it is open."} When each reminder fires and how hard it is to snooze are set on the reminder itself.
         </div>

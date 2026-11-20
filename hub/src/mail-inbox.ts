@@ -14,7 +14,8 @@ export const sourceOf = (account: string) => INBOX_SOURCES.find((s) => account.s
 import { mailboxLabel } from "./mail-filer.js";
 import { errCode } from "./logsafe.js";
 import { mailDocument, pictureData, withImages } from "./mail-html.js";
-import { bundleOf, NO_MODULES, type BundleContext } from "./mail-bundles.js";
+import { ownWords, quoteStart } from "./imports/mail-text.js";
+import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MODULES, type BundleContext } from "./mail-bundles.js";
 import { fetchBytesViaTor, fetchPublicBytes, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
 
@@ -68,11 +69,15 @@ CREATE TABLE IF NOT EXISTS inbox (
   remote TEXT,
   logo_domain TEXT,
   back_at TEXT,
+  seen INTEGER NOT NULL DEFAULT 0,
+  refs TEXT,
+  mine INTEGER NOT NULL DEFAULT 0,
+  thread TEXT,
   PRIMARY KEY (account, id)
 );
 CREATE INDEX IF NOT EXISTS inbox_at ON inbox(at);
 CREATE INDEX IF NOT EXISTS inbox_mid ON inbox(account, message_id);
-CREATE TABLE IF NOT EXISTS mailboxes (account TEXT PRIMARY KEY, last_refresh TEXT, last_error TEXT, more INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS mailboxes (account TEXT PRIMARY KEY, last_refresh TEXT, last_error TEXT, more INTEGER NOT NULL DEFAULT 0, sent_at TEXT);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS logos (domain TEXT PRIMARY KEY, url TEXT NOT NULL, svg TEXT, fetched_at TEXT);
 `;
@@ -84,8 +89,17 @@ export function openMailDb(dbPath: string): DB {
   db.pragma("synchronous = NORMAL");
   db.pragma("busy_timeout = 15000");
   db.pragma("secure_delete = ON");
-  // This file's first version: nothing older ever shipped, so there is nothing to bring forward.
   db.exec(SCHEMA);
+  // Since 1.0.10 (the first version shipped): read or unread, and threads. Columns are only added; the next refresh
+  // reads each mail's read state, and fills in what kept mail answers (headers only), so pins, snoozes and done stay.
+  const inboxCols = (db.prepare("PRAGMA table_info(inbox)").all() as { name: string }[]).map((c) => c.name);
+  if (!inboxCols.includes("seen")) db.exec("ALTER TABLE inbox ADD COLUMN seen INTEGER NOT NULL DEFAULT 0");
+  // One at a time, each only when it is missing: a start cut short between two of them must not stop the next start.
+  if (!inboxCols.includes("refs")) db.exec("ALTER TABLE inbox ADD COLUMN refs TEXT");
+  if (!inboxCols.includes("mine")) db.exec("ALTER TABLE inbox ADD COLUMN mine INTEGER NOT NULL DEFAULT 0");
+  if (!inboxCols.includes("thread")) db.exec("ALTER TABLE inbox ADD COLUMN thread TEXT");
+  // How far each mailbox's Sent folder has been read, so each sent mail is looked at once (icloud.ts).
+  if (!(db.prepare("PRAGMA table_info(mailboxes)").all() as { name: string }[]).some((c) => c.name === "sent_at")) db.exec("ALTER TABLE mailboxes ADD COLUMN sent_at TEXT");
   return db;
 }
 
@@ -116,20 +130,40 @@ const folderOf = (id: string) => /^\d+:\d+:([\s\S]+)$/.exec(id)?.[1] ?? "";
  * 3. mail kept as in the Inbox (or snoozed there) that is no longer in it was archived, moved or deleted elsewhere:
  *    it goes. Done mail is in Archive and stays (for its kept time). Nothing goes when the listing found no Inbox.
  */
-export function keepInbox(db: DB, account: string, found: { present: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[] }): { kept: number; gone: number } {
-  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+export function keepInbox(db: DB, account: string, found: { present: string[] | null; seen?: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; refs?: { id: string; refs: string[] }[] }): { kept: number; gone: number; woken: string[]; fresh: string[] } {
+  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const setRefs = db.prepare("UPDATE inbox SET refs = ? WHERE account = ? AND id = ?");
+  const fresh: string[] = [];
   // A brand's logo, fetched later (fetchMailImages); a new address for it is fetched again.
   const logo = db.prepare("INSERT INTO logos (domain, url) VALUES (?, ?) ON CONFLICT(domain) DO UPDATE SET url = excluded.url, svg = CASE WHEN logos.url = excluded.url THEN logos.svg END, fetched_at = CASE WHEN logos.url = excluded.url THEN logos.fetched_at END");
   const move = db.prepare("UPDATE inbox SET id = ?, state = CASE state WHEN 'done' THEN 'inbox' ELSE state END, done_at = CASE state WHEN 'done' THEN NULL ELSE done_at END WHERE account = ? AND message_id = ?");
   let kept = 0;
   let gone = 0;
   db.transaction(() => {
-    for (const m of found.moved) move.run(m.id, account, m.message_id);
+    // A mail carrying a kept mail's Message-ID is that mail having moved only when the kept one is no longer where it
+    // was. While it is, the newcomer is another mail under the same id (anyone can write any id), and taking it for
+    // the kept one would point Done and the read mark at it.
+    const here = found.present ? new Set(found.present) : null;
+    const idOf = db.prepare("SELECT id FROM inbox WHERE account = ? AND message_id = ?");
+    for (const m of found.moved) {
+      const at = (idOf.get(account, m.message_id) as { id: string } | undefined)?.id;
+      if (at && at !== m.id && here?.has(at)) continue;
+      move.run(m.id, account, m.message_id);
+    }
     for (const m of found.mails) {
-      kept += insert.run(account, m.id, mailKey(account, m.id), m.message_id, m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
-        m.subject, m.text, m.automated ? 1 : 0, m.unsubscribe ? 1 : 0, m.list_id, m.html, m.html && m.remote.length ? JSON.stringify(m.remote) : null, m.logo?.domain ?? null).changes;
+      const added = insert.run(account, m.id, mailKey(account, m.id), m.message_id, m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
+        m.subject, m.text, m.automated ? 1 : 0, m.unsubscribe ? 1 : 0, m.list_id, m.html, m.html && m.remote.length ? JSON.stringify(m.remote) : null, m.logo?.domain ?? null,
+        JSON.stringify(m.refs ?? []), m.mine ? 1 : 0, m.mine ? "sent" : "inbox", m.mine ? 1 : 0).changes;
+      if (added && !m.mine) { kept++; fresh.push(mailKey(account, m.id)); }
       if (m.logo) logo.run(m.logo.domain, m.logo.url);
+    }
+    for (const r of found.refs ?? []) setRefs.run(JSON.stringify(r.refs), account, r.id);
+    // Read or unread as the mailbox has it now (read in Apple Mail counts; Aeneas writes its own opening there too).
+    if (found.present && found.seen) {
+      const read = new Set(found.seen);
+      const mark = db.prepare("UPDATE inbox SET seen = ? WHERE account = ? AND id = ? AND seen != ?");
+      for (const id of found.present) { const v = read.has(id) ? 1 : 0; mark.run(v, account, id, v); }
     }
     if (found.present) {
       const here = new Set(found.present);
@@ -144,8 +178,96 @@ export function keepInbox(db: DB, account: string, found: { present: string[] | 
       }
     }
   }).immediate();
+  rethread(db, account);
+  // The owner's replies stay only while their thread has other mail kept.
+  gone += db.prepare("DELETE FROM inbox WHERE account = ? AND state = 'sent' AND (thread IS NULL OR thread NOT IN (SELECT thread FROM inbox WHERE account = ? AND state != 'sent' AND thread IS NOT NULL))").run(account, account).changes;
   if (gone) db.pragma("wal_checkpoint(TRUNCATE)");
-  return { kept, gone };
+  // A new message in a snoozed thread brings the thread back, as a reply should.
+  const woken = fresh.length ? (db.prepare(`SELECT DISTINCT s.key FROM inbox s JOIN inbox n ON n.thread = s.thread WHERE s.account = ? AND s.state = 'snoozed' AND n.key IN (${fresh.map(() => "?").join(",")})`).all(account, ...fresh) as { key: string }[]).map((r) => r.key) : [];
+  return { kept, gone, woken, fresh };
+}
+
+/** A subject without its reply and forward marks, for matching a reply that carries no thread headers. */
+const REPLY_MARKS = ["antw", "fwd", "fw", "re", "aw", "sv", "wg"];
+/**
+ * A subject without the reply and forward marks in front of it ("Re: ", "AW: ", "Fwd[2]: "), lower-cased, and how many
+ * marks it had. Read left to right once: a subject is the sender's text, and a pattern for this went over a long run
+ * of spaces again and again.
+ */
+export function subjectParts(subject: string): { bare: string; marks: number } {
+  const n = subject.length;
+  const space = (i: number) => { while (i < n && /\s/.test(subject[i])) i++; return i; };
+  let at = 0;
+  let marks = 0;
+  for (;;) {
+    let i = space(at);
+    const head = subject.slice(i, i + 4).toLowerCase();
+    const mark = REPLY_MARKS.find((m) => head.startsWith(m));
+    if (!mark) break;
+    i = space(i + mark.length);
+    if (subject[i] === "[") {
+      let k = i + 1;
+      while (k < n && subject[k] >= "0" && subject[k] <= "9") k++;
+      if (k === i + 1 || subject[k] !== "]") break;
+      i = space(k + 1);
+    }
+    if (subject[i] !== ":") break;
+    at = i + 1;
+    marks++;
+  }
+  return { bare: subject.slice(at).trim().toLowerCase(), marks };
+}
+const THREAD_FALLBACK_MS = 30 * DAY_MS;
+
+/**
+ * Put a mailbox's kept mail into threads, all of it at once (so a reply that links two threads joins them):
+ * - a message is in the thread of any kept message it names in `In-Reply-To` or `References`, or that names it;
+ * - a reply with neither header ("Re: Gutters") joins the newest earlier message of the last 30 days with the same
+ *   subject (marks aside) from the same person, or the owner's own;
+ * - a thread's id is the first 16 hex characters of the SHA-256 of the mailbox and its first message's Message-ID.
+ */
+export function rethread(db: DB, account: string): void {
+  type T = { key: string; message_id: string | null; refs: string | null; subject: string; from_address: string; at: string; mine: number; thread: string | null };
+  const rows = db.prepare("SELECT key, message_id, refs, subject, from_address, at, mine, thread FROM inbox WHERE account = ? ORDER BY at, key").all(account) as T[];
+  const parent = new Map(rows.map((r) => [r.key, r.key]));
+  const find = (k: string): string => { let p = parent.get(k)!; while (p !== parent.get(p)) p = parent.get(p)!; parent.set(k, p); return p; };
+  const join = (a: string, b: string) => { const x = find(a), y = find(b); if (x !== y) parent.set(y, x); };
+  // Each mail's subject is read once. Mail is whatever a sender wrote, and this runs over every kept mail after every
+  // refresh: looking back through the earlier mails for each reply, with the subject taken apart again each time,
+  // took a minute for a thousand crafted mails. One pass now, with the latest mail of each subject remembered.
+  const parts = new Map(rows.map((r) => [r.key, subjectParts(r.subject)]));
+  const byMid = new Map<string, T>();
+  for (const r of rows) if (r.message_id && !byMid.has(r.message_id)) byMid.set(r.message_id, r);
+  /** The latest mail so far with a subject, and the latest from each sender (never the owner's own, see below). */
+  const lastAny = new Map<string, T>();
+  const lastFrom = new Map<string, T>();
+  for (const r of rows) {
+    const mine = parts.get(r.key)!;
+    let refs: string[] = [];
+    try { refs = r.refs ? (JSON.parse(r.refs) as unknown[]).filter((x): x is string => typeof x === "string") : []; } catch { /* none */ }
+    // By what it answers, when the subject is the same too (as mail apps thread): a mail that only names a kept
+    // Message-ID under another subject does not get into that conversation.
+    for (const id of refs) { const o = byMid.get(id); if (o && o !== r && parts.get(o.key)!.bare === mine.bare) join(o.key, r.key); }
+    // A reply with no thread headers: the owner's own joins the latest mail of that subject; anyone else's joins only
+    // the latest mail the same sender wrote under it. A stranger who knows a subject does not get into its thread
+    // (that used to wake a snoozed thread and put the stranger's words in its row).
+    if (!refs.length && mine.marks > 0) {
+      const o = r.mine ? lastAny.get(mine.bare) : lastFrom.get(`${mine.bare}\n${r.from_address.toLowerCase()}`);
+      if (o && Date.parse(r.at) - Date.parse(o.at) <= THREAD_FALLBACK_MS) join(o.key, r.key);
+    }
+    lastAny.set(mine.bare, r);
+    if (!r.mine) lastFrom.set(`${mine.bare}\n${r.from_address.toLowerCase()}`, r);
+  }
+  const first = new Map<string, T>();
+  for (const r of rows) if (!first.has(find(r.key))) first.set(find(r.key), r);
+  const save = db.prepare("UPDATE inbox SET thread = ? WHERE key = ?");
+  db.transaction(() => {
+    for (const r of rows) {
+      const f = first.get(find(r.key))!;
+      const thread = crypto.createHash("sha256").update(`${account}\n${f.message_id ?? f.key}`).digest("hex").slice(0, 16);
+      if (r.thread !== thread) save.run(thread, r.key);
+    }
+  }).immediate();
 }
 
 /** Unlinking a mailbox: its mail goes at once. */
@@ -168,7 +290,8 @@ export function deleteAllMail(db: DB): number {
 // ---------------------------------------------------------------------------------------------------------------------
 // Reading what is kept (the routes)
 
-export type MailState = "inbox" | "snoozed" | "done";
+/** `sent`: the owner's own reply in a thread (from the Sent folder), never in a list of its own. */
+export type MailState = "inbox" | "snoozed" | "done" | "sent";
 /** One message in the list: no text, a first line of it. */
 export interface MailSummary {
   id: string; at: string; from: MailAddress; reply_to?: string; subject: string; preview: string;
@@ -177,23 +300,34 @@ export interface MailSummary {
   logo_domain?: string;
   /** When it came back from a snooze: the Inbox lists it by this time, not by when it arrived. */
   back_at?: string;
+  /** Read: opened on the Mail screen, or read in another mail app (the mailbox's own flag). */
+  seen: boolean;
+  /** Its thread (rethread): the screen shows a thread as one row. */
+  thread?: string;
+  /** The owner's own reply (state `sent`). */
+  mine?: boolean;
 }
 /**
  * One message whole: its text, and its HTML as a page to show (mailDocument: cleaned, nothing in it loads anything),
  * or null when it has none. `pictures_pending`: its web pictures are still being fetched. `pictures_ask`: this hub has
  * no Tor, so they are fetched only when the person asks for this mail's (POST /mail/messages/:id/pictures).
  */
-export interface MailMessage extends MailSummary { text: string; html: string | null; pictures_pending: boolean; pictures_ask: boolean }
+export interface MailMessage extends MailSummary {
+  text: string; html: string | null; pictures_pending: boolean; pictures_ask: boolean;
+  /** Where the quoted history starts in `text` (quoteStart), which clients fold; absent when it has none. */
+  quote_at?: number;
+}
 
-type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null };
+type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number };
 
 /**
- * The first words of a message for the list: its text on one line, at most 200 characters, links by their words only
- * (`label (https://…)`, `[label](https://…)` and bare addresses lose the address). Only the start of the text is
- * read for it (PREVIEW_READ): a mail of nothing but `(http://(http://…` cannot make it take long.
+ * The first words of a message for the list: its own words (ownWords: not the quoted history a reply carries) on one
+ * line, at most 200 characters, links by their words only (`label (https://…)`, `[label](https://…)` and bare
+ * addresses lose the address). Only the start of the text is read for it (PREVIEW_READ): a mail of nothing but
+ * `(http://(http://…` cannot make it take long.
  */
 const PREVIEW_READ = 4000;
-export const previewOf = (text: string) => text.slice(0, PREVIEW_READ)
+export const previewOf = (text: string) => ownWords(text.slice(0, PREVIEW_READ))
   .replace(/\[([^\]\n]{0,300})\]\(\s*(https?:|mailto:)[^)\s]*\s*\)/gi, "$1")
   .replace(/\s*[(<]\s*(https?:\/\/|mailto:)[^)>\s]*\s*[)>]/gi, "")
   .replace(/(https?:\/\/|www\.)[^\s)]+/gi, "")
@@ -207,6 +341,9 @@ function summary(r: Row): MailSummary {
     ...(r.snooze_until ? { snooze_until: r.snooze_until } : {}),
     ...(r.logo_domain ? { logo_domain: r.logo_domain } : {}),
     ...(r.back_at ? { back_at: r.back_at } : {}),
+    seen: !!r.seen,
+    ...(r.thread ? { thread: r.thread } : {}),
+    ...(r.mine ? { mine: true } : {}),
   };
 }
 
@@ -218,7 +355,7 @@ export const LIST_MAX = 5000;
  * the screen sorts it into Inbox, Snoozed, Done and the bundles.
  */
 export function listMail(db: DB, ctx: BundleContext = NO_MODULES): MailSummary[] {
-  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
+  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
   return rows.map((r) => ({
     ...summary(r),
     bundle: bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx),
@@ -298,6 +435,193 @@ async function moveKept(hub: Hub, keys: string[], to: "archive" | "inbox", now =
 // ---------------------------------------------------------------------------------------------------------------------
 // Snooze: on the hub only (the mail stays in iCloud's Inbox), with a task that says only that a mail is snoozed
 
+/**
+ * What the snooze choices mean (the owner's own, since 2026-11-20): "Later today" is `later_hours` on, on the hour;
+ * "Tomorrow" at `tomorrow`; "This weekend" on `weekend_day` (0 Sunday to 6 Saturday) at `weekend_time`; "Next week" on
+ * `week_day` at `week_time`. Times are `HH:MM`, on the device's clock.
+ */
+export interface SnoozeTimes { later_hours: number; tomorrow: string; weekend_day: number; weekend_time: string; week_day: number; week_time: string }
+export const SNOOZE_DEFAULTS: SnoozeTimes = { later_hours: 3, tomorrow: "08:00", weekend_day: 6, weekend_time: "09:00", week_day: 1, week_time: "08:00" };
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** The owner's snooze times, the defaults for any not set. */
+export function snoozeTimes(db: DB): SnoozeTimes {
+  const r = db.prepare("SELECT value FROM settings WHERE key = 'snooze_times'").get() as { value: string } | undefined;
+  let saved: Partial<SnoozeTimes> = {};
+  try { saved = r ? JSON.parse(r.value) as Partial<SnoozeTimes> : {}; } catch { /* defaults */ }
+  return { ...SNOOZE_DEFAULTS, ...saved };
+}
+
+/** Save snooze times (only the fields given; each checked), and answer all of them. */
+export function saveSnoozeTimes(db: DB, body: Record<string, unknown>): SnoozeTimes {
+  const t = snoozeTimes(db);
+  const day = (v: unknown, name: string) => { if (!Number.isInteger(v) || (v as number) < 0 || (v as number) > 6) throw new StoreError(422, `${name} is a day from 0 (Sunday) to 6 (Saturday)`); return v as number; };
+  const time = (v: unknown, name: string) => { if (typeof v !== "string" || !HHMM.test(v)) throw new StoreError(422, `${name} is a time like 08:00`); return v; };
+  if (body.later_hours !== undefined) {
+    if (!Number.isInteger(body.later_hours) || (body.later_hours as number) < 1 || (body.later_hours as number) > 12) throw new StoreError(422, "later_hours is a whole number of hours from 1 to 12");
+    t.later_hours = body.later_hours as number;
+  }
+  if (body.tomorrow !== undefined) t.tomorrow = time(body.tomorrow, "tomorrow");
+  if (body.weekend_day !== undefined) t.weekend_day = day(body.weekend_day, "weekend_day");
+  if (body.weekend_time !== undefined) t.weekend_time = time(body.weekend_time, "weekend_time");
+  if (body.week_day !== undefined) t.week_day = day(body.week_day, "week_day");
+  if (body.week_time !== undefined) t.week_time = time(body.week_time, "week_time");
+  db.prepare("INSERT INTO settings (key, value) VALUES ('snooze_times', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(t));
+  return t;
+}
+
+/**
+ * When a bundle's mail shows in the Inbox (since 2026-11-20): `now` as it arrives (no setting is the same), `daily` at
+ * `time`, `weekly` on `day` (0 Sunday to 6 Saturday) at `time`, or `never` (only in the bundle's own view). Clients work
+ * out from each mail's arrival when it shows; pinned mail always does. Nothing changes in the mailbox.
+ */
+export interface BundleDelivery { mode: "now" | "daily" | "weekly" | "never"; time?: string; day?: number }
+
+/** Each bundle's delivery, for those set. */
+export function bundleDelivery(db: DB): Record<string, BundleDelivery> {
+  const r = db.prepare("SELECT value FROM settings WHERE key = 'bundle_delivery'").get() as { value: string } | undefined;
+  try { return r ? JSON.parse(r.value) as Record<string, BundleDelivery> : {}; } catch { return {}; }
+}
+
+/** Set one bundle's delivery (checked), and answer them all. */
+export function saveBundleDelivery(db: DB, bundle: string, body: Record<string, unknown>): Record<string, BundleDelivery> {
+  if (!(BUNDLE_IDS as readonly string[]).includes(bundle) && !customBundles(db).some((b) => b.id === bundle)) throw new StoreError(404, "there is no such bundle");
+  const mode = body.mode;
+  if (mode !== "now" && mode !== "daily" && mode !== "weekly" && mode !== "never") throw new StoreError(422, "mode is now, daily, weekly or never");
+  const d: BundleDelivery = { mode };
+  if (mode === "daily" || mode === "weekly") {
+    if (typeof body.time !== "string" || !HHMM.test(body.time)) throw new StoreError(422, "time is a time like 07:00");
+    d.time = body.time;
+  }
+  if (mode === "weekly") {
+    if (!Number.isInteger(body.day) || (body.day as number) < 0 || (body.day as number) > 6) throw new StoreError(422, "day is a day from 0 (Sunday) to 6 (Saturday)");
+    d.day = body.day as number;
+  }
+  const all = bundleDelivery(db);
+  if (mode === "now") delete all[bundle]; else all[bundle] = d;
+  db.prepare("INSERT INTO settings (key, value) VALUES ('bundle_delivery', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(all));
+  return all;
+}
+
+/**
+ * New-mail notifications (since 2026-11-20): which new mail notifies, and what a notification says. `people`: mail
+ * from a person (in no bundle); `bundles`: those whose mail notifies too, while it shows as it arrives; `detail`:
+ * `full` (sender and subject), `sender`, or `count`.
+ */
+export interface MailNotify { people: boolean; bundles: string[]; detail: "full" | "sender" | "count" }
+export const NOTIFY_DEFAULTS: MailNotify = { people: true, bundles: [], detail: "full" };
+/** Mail this much older than the last refresh still counts as new (a clock a little off). */
+const NOTIFY_SLACK_MS = 10 * 60_000;
+
+export function mailNotify(db: DB): MailNotify {
+  const r = db.prepare("SELECT value FROM settings WHERE key = 'mail_notify'").get() as { value: string } | undefined;
+  try { return { ...NOTIFY_DEFAULTS, ...(r ? JSON.parse(r.value) as Partial<MailNotify> : {}) }; } catch { return { ...NOTIFY_DEFAULTS }; }
+}
+
+/** Change the notification settings: `people`, `detail`, or one bundle (`bundle` with `on`). */
+export function saveMailNotify(db: DB, body: Record<string, unknown>): MailNotify {
+  const n = mailNotify(db);
+  if (body.people !== undefined) { if (typeof body.people !== "boolean") throw new StoreError(422, "people is true or false"); n.people = body.people; }
+  if (body.detail !== undefined) { if (body.detail !== "full" && body.detail !== "sender" && body.detail !== "count") throw new StoreError(422, "detail is full, sender or count"); n.detail = body.detail; }
+  if (body.bundle !== undefined) {
+    if (typeof body.bundle !== "string" || typeof body.on !== "boolean") throw new StoreError(422, "bundle is a bundle's id, with on true or false");
+    if (!(BUNDLE_IDS as readonly string[]).includes(body.bundle) && !customBundles(db).some((b) => b.id === body.bundle)) throw new StoreError(404, "there is no such bundle");
+    n.bundles = body.on ? [...new Set([...n.bundles, body.bundle])] : n.bundles.filter((b) => b !== body.bundle);
+  }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('mail_notify', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(n));
+  return n;
+}
+
+/**
+ * One notification for the new mail of a refresh that the owner wants to hear about: from a person, or in a bundle
+ * they switched on that shows as it arrives (held mail shows later, quietly). Sent to connected devices only (the
+ * `notify` event); the log has the count only.
+ */
+export function notifyNewMail(hub: Hub, keys: string[], now = new Date()): number {
+  if (!keys.length) return 0;
+  const db = hub.mailDb;
+  const settings = mailNotify(db);
+  const delivery = bundleDelivery(db);
+  const ctx = bundleContext(hub);
+  const get = db.prepare("SELECT from_name, from_address, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, state, seen FROM inbox WHERE key = ?");
+  const hits: { name: string; subject: string }[] = [];
+  for (const key of keys) {
+    const r = get.get(key) as { from_name: string; from_address: string; subject: string; text: string; automated: number; unsubscribe: number; list_id: string | null; state: string; seen: number } | undefined;
+    // Mail already read in another mail app is not news.
+    if (!r || r.state !== "inbox" || r.seen) continue;
+    const bundle = bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx);
+    const wanted = bundle === null ? settings.people : settings.bundles.includes(bundle) && (delivery[bundle]?.mode ?? "now") === "now";
+    if (wanted) hits.push({ name: oneLine(r.from_name) || oneLine(r.from_address), subject: oneLine(r.subject, 120) });
+  }
+  if (!hits.length) return 0;
+  hub.bus.emit("notify", { id: `mail:${now.toISOString()}`, kind: "mail", title: notifyTitle(hits, settings.detail), at: now.toISOString() });
+  console.log(`[mail-inbox] notified of ${hits.length} new mail(s)`);
+  return hits.length;
+}
+
+/** A notification's words for some new mail, as `detail` says: who and what, who only, or a count. */
+/**
+ * A sender's name or a subject as an alert shows it: one line, no control characters or characters that turn the
+ * text around, and short. A name is the sender's own text, and with a line break in it an alert read as two lines
+ * of the hub's own ("The hub's disk is almost full", then a made-up sender).
+ */
+const oneLine = (s: string, max = 60) => s.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+
+function notifyTitle(hits: { name: string; subject: string }[], detail: MailNotify["detail"], lead = ""): string {
+  const names = [...new Set(hits.map((h) => h.name))];
+  const who = names.slice(0, 3).join(", ") + (names.length > 3 ? ` and ${names.length - 3} more` : "");
+  const count = hits.length === 1 ? "1 new mail" : `${hits.length} new mails`;
+  if (detail === "count") return `${lead}${count}`;
+  if (detail === "sender") return hits.length === 1 ? `${lead}New mail from ${who}` : `${lead}${count} from ${who}`;
+  return hits.length === 1 ? `${lead}${hits[0].name}: ${hits[0].subject || "(no subject)"}` : `${lead}${count}: ${who}`;
+}
+
+/** The latest time a held bundle showed (`daily` or `weekly`) at or before `now`, on the hub's clock. */
+export function lastDelivery(d: BundleDelivery, now: Date): Date | null {
+  if (d.mode !== "daily" && d.mode !== "weekly") return null;
+  const [h, m] = (d.time ?? "00:00").split(":").map(Number);
+  const t = new Date(now);
+  t.setHours(h || 0, m || 0, 0, 0);
+  if (d.mode === "weekly") t.setDate(t.getDate() - ((t.getDay() - (d.day ?? 0) + 7) % 7));
+  if (t > now) t.setDate(t.getDate() - (d.mode === "daily" ? 1 : 7));
+  return t;
+}
+
+/**
+ * Held bundles (once a day, once a week) whose time has come since the last look, and that the owner switched on:
+ * one notification each for the mail they bring to the Inbox ("Promos: 5 new mails: …"). Run every minute.
+ */
+export function notifyDeliveries(hub: Hub, now = new Date()): number {
+  const db = hub.mailDb;
+  const last = (db.prepare("SELECT value FROM settings WHERE key = 'delivery_checked'").get() as { value: string } | undefined)?.value;
+  db.prepare("INSERT INTO settings (key, value) VALUES ('delivery_checked', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(now.toISOString());
+  if (!last) return 0;
+  const settings = mailNotify(db);
+  const delivery = bundleDelivery(db);
+  const due = settings.bundles.map((b) => ({ b, d: delivery[b], at: delivery[b] ? lastDelivery(delivery[b], now) : null }))
+    .filter((x): x is { b: string; d: BundleDelivery; at: Date } => !!x.at && x.at.toISOString() > last);
+  if (!due.length) return 0;
+  const ctx = bundleContext(hub);
+  const custom = new Map(customBundles(db).map((c) => [c.id, c.name]));
+  const rows = db.prepare("SELECT from_name, from_address, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, at, pinned FROM inbox WHERE state = 'inbox' AND mine = 0 AND at >= ?")
+    .all(new Date(now.getTime() - 8 * DAY_MS).toISOString()) as { from_name: string; from_address: string; subject: string; text: string; automated: number; unsubscribe: number; list_id: string | null; at: string; pinned: number }[];
+  let sent = 0;
+  for (const { b, d, at } of due) {
+    const from = new Date(at);
+    from.setDate(from.getDate() - (d.mode === "daily" ? 1 : 7));
+    const hits = rows.filter((r) => !r.pinned && r.at >= from.toISOString() && r.at < at.toISOString()
+      && bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx) === b)
+      .map((r) => ({ name: (r.from_name.trim() || r.from_address).slice(0, 60), subject: r.subject.replace(/\s+/g, " ").trim().slice(0, 120) }));
+    if (!hits.length) continue;
+    hub.bus.emit("notify", { id: `mail:${b}:${at.toISOString()}`, kind: "mail", title: notifyTitle(hits, settings.detail, `${BUNDLE_NAMES[b] ?? custom.get(b) ?? "Mail"}: `), at: now.toISOString() });
+    sent++;
+  }
+  if (sent) console.log(`[mail-inbox] notified of ${sent} bundle(s) arriving`);
+  return sent;
+}
+
+/** A message's whole thread (two parameters: the key, twice): what Pin and Snooze act on. */
+const THREAD_OF = "key = ? OR (thread IS NOT NULL AND thread = (SELECT thread FROM inbox WHERE key = ?))";
 /** A snooze ends at most this far ahead. */
 export const SNOOZE_MAX_DAYS = 366;
 type SnoozeRow = { key: string; state: MailState; task_id: string | null };
@@ -322,10 +646,14 @@ export function snoozeMail(hub: Hub, key: string, until: Date): boolean {
   const r = db.prepare("SELECT key, state, task_id FROM inbox WHERE key = ?").get(key) as SnoozeRow | undefined;
   if (!r || r.state === "done") return false;
   const when = until.toISOString();
-  let task = openTask(hub, r.task_id);
+  // The thread's open task, whichever of its messages carries it: a thread that came back, got a reply and is
+  // snoozed again keeps its one task (the reply has none of its own, and a second task was made for it).
+  const carried = r.task_id ?? (db.prepare(`SELECT task_id FROM inbox WHERE task_id IS NOT NULL AND (${THREAD_OF}) LIMIT 1`).get(key, key) as { task_id: string } | undefined)?.task_id ?? null;
+  let task = openTask(hub, carried);
   if (task) task = hub.store.patch(task.id, { remind_at: when, snoozed_until: null });
   else task = hub.store.create("task", { title: SNOOZE_TASK_TITLE, status: "scheduled", order: Date.now(), remind_at: when, mail: key });
-  db.prepare("UPDATE inbox SET state = 'snoozed', snooze_until = ?, task_id = ?, back_at = NULL WHERE key = ?").run(when, task.id, key);
+  // The whole thread: every message of it in the Inbox (its done mail and the owner's replies stay as they are).
+  db.prepare(`UPDATE inbox SET state = 'snoozed', snooze_until = ?, task_id = ?, back_at = NULL WHERE state IN ('inbox', 'snoozed') AND (${THREAD_OF})`).run(when, task.id, key, key);
   return true;
 }
 
@@ -337,7 +665,7 @@ export function unsnoozeMail(hub: Hub, key: string, opts: { keepTask?: boolean }
   const db = hub.mailDb;
   const r = db.prepare("SELECT key, state, task_id FROM inbox WHERE key = ?").get(key) as SnoozeRow | undefined;
   if (!r || r.state !== "snoozed") return false;
-  db.prepare("UPDATE inbox SET state = 'inbox', snooze_until = NULL, task_id = NULL, back_at = ? WHERE key = ?").run(now.toISOString(), key);
+  db.prepare(`UPDATE inbox SET state = 'inbox', snooze_until = NULL, task_id = NULL, back_at = ? WHERE state = 'snoozed' AND (${THREAD_OF})`).run(now.toISOString(), key, key);
   const task = opts.keepTask ? null : openTask(hub, r.task_id);
   if (task) hub.store.patch(task.id, { deleted_at: now.toISOString() });
   return true;
@@ -378,9 +706,52 @@ export function installMailHooks(hub: Hub): void {
 // ---------------------------------------------------------------------------------------------------------------------
 // What the owner does to a mail (on the hub only, nothing in iCloud changes)
 
+/**
+ * Read or unread: on the hub at once, then in the mailbox (its source's setSeen, after the refresh or move that may be
+ * running). `synced`: the mailbox has it too; when not (offline, the message changed), the next refresh shows the
+ * mailbox's own state again.
+ */
+/** At most this many messages are marked read or unread in one request. */
+export const SEEN_MAX = 500;
+
+/**
+ * Mark kept messages read or unread: on the hub at once, then in the mailbox, one sign-in for each mailbox whatever
+ * their number (a thread's unread mails, a selection). `ok`: how many are kept; `synced`: how many the mailbox took.
+ */
+export async function setSeenMany(hub: Hub, keys: string[], seen: boolean): Promise<{ ok: number; synced: number }> {
+  const db = hub.mailDb;
+  const get = db.prepare("SELECT key, account FROM inbox WHERE key = ?");
+  const rows = [...new Set(keys)].map((k) => get.get(k) as { key: string; account: string } | undefined).filter((r): r is { key: string; account: string } => !!r);
+  const mark = db.prepare("UPDATE inbox SET seen = ? WHERE key = ?");
+  for (const r of rows) mark.run(seen ? 1 : 0, r.key);
+  let synced = 0;
+  for (const account of [...new Set(rows.map((r) => r.account))]) {
+    const mine = rows.filter((r) => r.account === account);
+    await exclusive(hub, async () => {
+      // Each one's id where it is now: a refresh or a move may have changed it while this waited.
+      const now = db.prepare("SELECT id, message_id FROM inbox WHERE key = ?");
+      const refs = mine.map((r) => now.get(r.key) as { id: string; message_id: string | null } | undefined);
+      const source = sourceOf(account);
+      const here = refs.filter((x): x is { id: string; message_id: string | null } => !!x);
+      if (!source || !here.length) return;
+      synced += (await source.setSeen(hub, account, here, seen)).filter(Boolean).length;
+      // A refresh that read the mailbox's flags before this mark reached it wrote the old state back: said again.
+      for (const r of mine) mark.run(seen ? 1 : 0, r.key);
+    }).catch((e) => {
+      console.error(`[mail-inbox] ${mailboxLabel(hub, account)}: read state ${errCode(e)}`);
+    });
+  }
+  return { ok: rows.length, synced };
+}
+
+export async function setSeen(hub: Hub, key: string, seen: boolean): Promise<{ ok: boolean; synced: boolean }> {
+  const r = await setSeenMany(hub, [key], seen);
+  return { ok: r.ok === 1, synced: r.synced === 1 };
+}
+
 /** Pin or unpin a kept mail: it stays where it is in the list, shows with a pin, and Sweep passes it by. */
 export function setPinned(db: DB, key: string, pinned: boolean): boolean {
-  return db.prepare("UPDATE inbox SET pinned = ? WHERE key = ?").run(pinned ? 1 : 0, key).changes > 0;
+  return db.prepare(`UPDATE inbox SET pinned = ? WHERE ${THREAD_OF}`).run(pinned ? 1 : 0, key, key).changes > 0;
 }
 
 /** The verified logos the kept mail uses, by domain, as data: SVG pictures (one each, however many mails). */
@@ -394,8 +765,10 @@ export function mailLogos(db: DB): Record<string, string> {
  * Tor), so pictures not there yet are on their way; otherwise they wait for the person to ask.
  */
 export function mailMessage(db: DB, key: string, byTor = true): MailMessage | null {
-  const r = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, html, remote FROM inbox WHERE key = ?").get(key) as (Row & { html: string | null; remote: string | null }) | undefined;
-  return r ? { ...summary(r), text: r.text, html: r.html ? mailDocument(withImages(r.html, [])) : null, pictures_pending: !!r.remote && byTor, pictures_ask: !!r.remote && !byTor } : null;
+  const r = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, html, remote, seen FROM inbox WHERE key = ?").get(key) as (Row & { html: string | null; remote: string | null }) | undefined;
+  if (!r) return null;
+  const quote = quoteStart(r.text);
+  return { ...summary(r), text: r.text, html: r.html ? mailDocument(withImages(r.html, [])) : null, pictures_pending: !!r.remote && byTor, pictures_ask: !!r.remote && !byTor, ...(quote >= 0 ? { quote_at: quote } : {}) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -586,22 +959,33 @@ export function refreshMail(hub: Hub, opts: { owner?: boolean } = {}, now: Date 
     const out: RefreshResult = { mailboxes: [] };
     const save = db.prepare("INSERT INTO mailboxes (account, last_refresh, last_error, more) VALUES (?, ?, ?, ?) ON CONFLICT(account) DO UPDATE SET last_refresh = excluded.last_refresh, last_error = excluded.last_error, more = excluded.more");
     const since = new Date(now.getTime() - INBOX_DAYS * DAY_MS);
+    const arrived: string[] = [];
     for (const [source, account] of INBOX_SOURCES.flatMap((src) => src.accounts(hub).map((a) => [src, a] as const))) {
       const email = account.slice(source.prefix.length);
       try {
-        const found = await source.list(hub, account, since, isKept(db, account), isKeptMessage(db, account), opts);
+        const missing = db.prepare("SELECT 1 FROM inbox WHERE account = ? AND id = ? AND refs IS NULL");
+        const sentFrom = (db.prepare("SELECT sent_at FROM mailboxes WHERE account = ?").get(account) as { sent_at: string | null } | undefined)?.sent_at ?? null;
+        const found = await source.list(hub, account, since, isKept(db, account), isKeptMessage(db, account), { ...opts, needsRefs: (id) => !!missing.get(account, id), sentFrom });
+        const before = (db.prepare("SELECT last_refresh FROM mailboxes WHERE account = ?").get(account) as { last_refresh: string | null } | undefined)?.last_refresh ?? null;
         const r = keepInbox(db, account, found);
+        for (const key of r.woken) unsnoozeMail(hub, key, {}, now);
+        // New mail since the last refresh, never the first one (a mailbox's first 90 days).
+        if (before) arrived.push(...r.fresh.filter((key) => { const at = (db.prepare("SELECT at FROM inbox WHERE key = ?").get(key) as { at: string } | undefined)?.at; return !!at && Date.parse(at) >= Date.parse(before) - NOTIFY_SLACK_MS; }));
         save.run(account, new Date().toISOString(), null, found.more ? 1 : 0);
+        if (found.sentAt) db.prepare("UPDATE mailboxes SET sent_at = ? WHERE account = ?").run(found.sentAt, account);
         if (r.kept || r.gone || found.more) console.log(`[mail-inbox] ${mailboxLabel(hub, account)}: ${r.kept} new, ${r.gone} left the Inbox${found.more ? ", more next time" : ""}`);
         out.mailboxes.push({ email, kept: r.kept, gone: r.gone, more: found.more });
       } catch (e) {
         // A StoreError's message is the hub's own (a source never passes on the server's words); anything else is not shown.
         const error = e instanceof StoreError ? e.message : "The mailbox could not be refreshed. The hub's log has the error code.";
-        save.run(account, new Date().toISOString(), error, 0);
+        // The time of the last refresh that worked stays: new mail is told from it, and mail that came while the
+        // mailbox could not be reached is still new when it can be again.
+        db.prepare("INSERT INTO mailboxes (account, last_refresh, last_error, more) VALUES (?, NULL, ?, 0) ON CONFLICT(account) DO UPDATE SET last_error = excluded.last_error, more = 0").run(account, error);
         console.error(`[mail-inbox] ${mailboxLabel(hub, account)}: ${errCode(e)}`);
         out.mailboxes.push({ email, error });
       }
     }
+    try { notifyNewMail(hub, arrived, now); } catch (e) { console.error(`[mail-inbox] notify ${errCode(e)}`); }
     // The new mail's web pictures, in the background (the Refresh button does not wait for them).
     void fetchMailImages(hub).catch((e) => console.error(`[mail-inbox] pictures: ${errCode(e)}`));
     return out;
@@ -626,7 +1010,13 @@ export function startMailInboxJob(hub: Hub): () => void {
   };
   const first = setTimeout(tick, 60_000);
   const every = setInterval(tick, 15 * 60_000);
+  // Held bundles whose time has come: looked at every minute.
+  const minute = setInterval(() => {
+    if (!hub.modules.on("mail_inbox")) return;
+    try { notifyDeliveries(hub); } catch (e) { console.error(`[mail-inbox] notify ${errCode(e)}`); }
+  }, 60_000);
   first.unref?.();
   every.unref?.();
-  return () => { clearTimeout(first); clearInterval(every); clearTimeout(soon); };
+  minute.unref?.();
+  return () => { clearTimeout(first); clearInterval(every); clearTimeout(soon); clearInterval(minute); };
 }

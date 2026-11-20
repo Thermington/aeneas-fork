@@ -67,6 +67,9 @@ export function cleanCss(css: string): string {
   const plain = css
     .replace(/[<>\u0000\uE020]/g, " ")
     .replace(/\\/g, "") // CSS escapes could spell a word the checks below look for (u\72l, \65xpression)
+    // The page's own class for folding quoted history (body.aeneas-fold): a mail's CSS cannot name it, so it cannot
+    // show one text while folded and another unfolded.
+    .replace(/aeneas/gi, "x-a")
     .replace(/@import[^;]*;?/gi, "");
   // A data: picture is marked (\uE020) while every other url( goes, then written back as url(.
   return pictureUrlsMarked(withoutFontFaces(plain))
@@ -345,6 +348,15 @@ export function pictureData(b: Buffer): string | null {
  * html and body `height: 100%`, and with the padding added on top the page was always a little taller than its frame.
  */
 export const MAIL_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src 'none'; script-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'";
+/**
+ * The quoted history a reply carries, as mail apps mark it in HTML: Gmail's `gmail_quote`, Apple Mail's and
+ * Thunderbird's `<blockquote type="cite">` (and Thunderbird's line above it), Yahoo's `yahoo_quoted`, and Outlook's
+ * `divRplyFwdMsg` with everything after it. The page folds it while its body has `aeneas-fold`; the screen's own code
+ * (outside the page, which runs none) shows a button that unfolds it. Kept the same as QUOTE_SELECTOR in web/src/lib/mail.ts.
+ */
+export const QUOTE_SELECTOR = '.gmail_quote, blockquote[type="cite"], .moz-cite-prefix, .yahoo_quoted, #divRplyFwdMsg, #divRplyFwdMsg ~ *';
+const FOLD_CSS = QUOTE_SELECTOR.split(", ").map((s) => `body.aeneas-fold ${s}`).join(",") + "{display:none!important}";
+
 export function mailDocument(clean: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${MAIL_CSP}"><meta name="referrer" content="no-referrer"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#1f1f1f}body{padding:12px 16px;box-sizing:border-box;font:15px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif;overflow-wrap:anywhere;overflow-x:auto}img{max-width:100%;height:auto}table{max-width:100%}</style></head><body>${clean}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${MAIL_CSP}"><meta name="referrer" content="no-referrer"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#1f1f1f}body{padding:12px 16px;box-sizing:border-box;font:15px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif;overflow-wrap:anywhere;overflow-x:auto}img{max-width:100%;height:auto}table{max-width:100%}${FOLD_CSS}</style></head><body class="aeneas-fold">${clean}</body></html>`;
 }

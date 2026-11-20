@@ -41,6 +41,7 @@ import { LayoutStore } from "./layouts.js";
 import { ConnectionStore } from "./imports/connections.js";
 import { WikiStore } from "./wiki.js";
 import { ModuleStore, type ModuleId } from "./modules.js";
+import { AlertStore } from "./alerts.js";
 import { FeedKeys } from "./feedkeys.js";
 import { runSeeds } from "./seed.js";
 import path from "node:path";
@@ -92,6 +93,8 @@ export interface Hub {
   profile: ProfileStore;
   /** Which modules are on (modules.ts): one setting for every device. */
   modules: ModuleStore;
+  /** Which kinds of alert go to devices (alerts.ts). */
+  alerts: AlertStore;
   /** One-door keys for the calendar feed and sensor boards (feedkeys.ts). */
   feedKeys: FeedKeys;
   /** The age key every copy of the data leaving hub.sqlite is encrypted to (backupkey.ts). */
@@ -170,7 +173,7 @@ export function createHub(cfg: Config): Hub {
     hub.connections.update((c) => { c.helper_vault = { password, created_at: nowIso() }; });
     return password;
   });
-  const hub: Hub = { helpers, cfg, db, chatDb, mailDb, bus, store, vault, ai, map, devices, deviceKeys: new DeviceKeys(path.join(cfg.dataDir, "device-keys.json")), work: new WorkSpace(path.join(cfg.dataDir, "work-space.json")), feel: new FeelStore(path.join(cfg.dataDir, "feel.json")), dashboard: new DashboardStore(path.join(cfg.dataDir, "dashboard.json")), layouts: new LayoutStore(path.join(cfg.dataDir, "layouts")), startedAt: nowIso(), tlsProbe: (url) => probeTls(url), checkers: { ...defaultCheckers, backup: backupChecker(sshRunner, cfg.backupJobs) }, connections: new ConnectionStore(path.join(cfg.dataDir, "connections.json"), secretBox), secretBox, profile: new ProfileStore(path.join(cfg.dataDir, "profile.json"), cfg.ownerName), wiki: new WikiStore(path.join(cfg.dataDir, "wiki.json")), feedKeys: new FeedKeys(path.join(cfg.dataDir, "feed-keys.json")), backupKey: new BackupKey(cfg.backupKeyFile, path.join(cfg.dataDir, "backup-recovery.json")),modules: new ModuleStore(path.join(cfg.dataDir, "modules.json"), { preset: cfg.modulesPreset, existing: () => store.hasOwnerData() }), fetch: (input, init) => fetch(input, init), close: () => { db.close(); chatDb.close(); mailDb.close(); } };
+  const hub: Hub = { helpers, cfg, db, chatDb, mailDb, bus, store, vault, ai, map, devices, deviceKeys: new DeviceKeys(path.join(cfg.dataDir, "device-keys.json")), work: new WorkSpace(path.join(cfg.dataDir, "work-space.json")), feel: new FeelStore(path.join(cfg.dataDir, "feel.json")), dashboard: new DashboardStore(path.join(cfg.dataDir, "dashboard.json")), layouts: new LayoutStore(path.join(cfg.dataDir, "layouts")), startedAt: nowIso(), tlsProbe: (url) => probeTls(url), checkers: { ...defaultCheckers, backup: backupChecker(sshRunner, cfg.backupJobs) }, connections: new ConnectionStore(path.join(cfg.dataDir, "connections.json"), secretBox), secretBox, profile: new ProfileStore(path.join(cfg.dataDir, "profile.json"), cfg.ownerName), wiki: new WikiStore(path.join(cfg.dataDir, "wiki.json")), feedKeys: new FeedKeys(path.join(cfg.dataDir, "feed-keys.json")), backupKey: new BackupKey(cfg.backupKeyFile, path.join(cfg.dataDir, "backup-recovery.json")),alerts: new AlertStore(path.join(cfg.dataDir, "alerts.json")), modules: new ModuleStore(path.join(cfg.dataDir, "modules.json"), { preset: cfg.modulesPreset, existing: () => store.hasOwnerData() }), fetch: (input, init) => fetch(input, init), close: () => { db.close(); chatDb.close(); mailDb.close(); } };
   keepSeqMark(store, path.join(cfg.dataDir, "sync-mark.json"));
   // The Mail screen switched off: its mail goes at once (its data is not kept for later, unlike other modules').
   hub.modules.onChange((_, off) => {

@@ -4,7 +4,8 @@
  */
 
 export interface MailAddress { name: string; address: string }
-export type MailState = "inbox" | "snoozed" | "done";
+/** `sent`: the owner's own reply, shown only inside its thread. */
+export type MailState = "inbox" | "snoozed" | "done" | "sent";
 /** One message in the list (GET /mail): no text, `preview` is its first words. `bundle`: the bundle the hub sorted it into. */
 export interface MailSummary {
   id: string; at: string; from: MailAddress; reply_to?: string; subject: string; preview: string;
@@ -13,7 +14,73 @@ export interface MailSummary {
   logo_domain?: string;
   /** When it came back from a snooze: the Inbox lists it by this, not by when it arrived. */
   back_at?: string;
+  /** Read (opened here, or read in another mail app). An older hub leaves it out: then everything shows as read. */
+  seen?: boolean;
+  /** Its thread: messages with the same one show as one row. */
+  thread?: string;
+  /** The owner's own reply (from Sent). */
+  mine?: boolean;
 }
+
+/**
+ * A thread as one row: it reads like a mail (its newest received one in the thread's state: id, sender, bundle) so the
+ * day groups, bundles and views work as for single mail, with its messages (`members`, oldest first, the owner's
+ * replies among them) and the ids each action takes.
+ */
+export interface MailThread extends MailSummary {
+  members: MailSummary[];
+  /** "Alex, me (3)": who wrote, in order, the owner as "me". */
+  people: string;
+  /** Done and Snooze: the thread's mail in the Inbox or snoozed; Move to Inbox: its done mail; read on opening: its unread. */
+  ids: { open: string[]; done: string[]; unread: string[] };
+}
+
+/**
+ * Messages into threads. A thread's state is the Inbox while any of its received mail is there, else Snoozed, else Done;
+ * it is unread while any received message is; pinned when any is; a person's mail in it keeps it out of the bundles.
+ * The owner's own replies never make a thread on their own.
+ */
+export function threadRows(messages: MailSummary[]): MailThread[] {
+  const groups = new Map<string, MailSummary[]>();
+  for (const m of messages) { const k = m.thread ?? m.id; const g = groups.get(k); if (g) g.push(m); else groups.set(k, [m]); }
+  const out: MailThread[] = [];
+  for (const group of groups.values()) {
+    const members = [...group].sort((a, b) => a.at.localeCompare(b.at));
+    const received = members.filter((m) => !m.mine && m.state !== "sent");
+    if (!received.length) continue;
+    const state: MailState = received.some((m) => m.state === "inbox") ? "inbox" : received.some((m) => m.state === "snoozed") ? "snoozed" : "done";
+    const inState = received.filter((m) => m.state === state);
+    const base = inState[inState.length - 1];
+    const last = members[members.length - 1];
+    const person = received.some((m) => !m.automated);
+    const names: string[] = [];
+    for (const m of members) {
+      const n = m.mine ? "me" : members.length > 1 ? (personLabel(m.from).split(/\s+/)[0] || m.from.address) : personLabel(m.from);
+      if (!names.includes(n)) names.push(n);
+    }
+    out.push({
+      ...base,
+      subject: members[0].subject,
+      preview: last.mine ? `You: ${last.preview}` : last.preview,
+      at: last.at > base.at ? last.at : base.at,
+      pinned: received.some((m) => m.pinned),
+      seen: received.every((m) => m.seen !== false),
+      automated: !person,
+      bundle: person ? null : base.bundle,
+      members,
+      people: members.length > 1 ? `${names.join(", ")} (${members.length})` : names[0],
+      ids: {
+        open: received.filter((m) => m.state === "inbox" || m.state === "snoozed").map((m) => m.id),
+        done: received.filter((m) => m.state === "done").map((m) => m.id),
+        unread: received.filter((m) => m.seen === false).map((m) => m.id),
+      },
+    });
+  }
+  return out;
+}
+
+/** Unread: the hub says it has not been read. */
+export const isUnread = (m: Pick<MailSummary, "seen">) => m.seen === false;
 
 /** The time a mail is listed by in the Inbox: when it came back from a snooze, else when it arrived. */
 export const shownAt = (m: Pick<MailSummary, "at" | "back_at">) => (m.back_at && m.back_at > m.at ? m.back_at : m.at);
@@ -21,20 +88,28 @@ export const shownAt = (m: Pick<MailSummary, "at" | "back_at">) => (m.back_at &&
 /** A snooze choice: "Tomorrow" at 8 AM and so on. */
 export interface SnoozeChoice { id: "later" | "tomorrow" | "weekend" | "nextweek"; label: string; at: Date }
 
+/** What the choices mean, as the owner set them on the hub (days 0 Sunday to 6 Saturday, times `HH:MM`). */
+export interface SnoozeTimes { later_hours: number; tomorrow: string; weekend_day: number; weekend_time: string; week_day: number; week_time: string }
+export const SNOOZE_DEFAULTS: SnoozeTimes = { later_hours: 3, tomorrow: "08:00", weekend_day: 6, weekend_time: "09:00", week_day: 1, week_time: "08:00" };
+
 /**
  * The snooze choices from `now`: Later today (3 hours on, on the hour; only before 9 PM), Tomorrow 8 AM, This weekend
  * (Saturday 9 AM; next Saturday when it is the weekend), Next week (Monday 8 AM).
  */
-export function snoozeChoices(now: Date = new Date()): SnoozeChoice[] {
-  const at = (days: number, h: number) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h, 0, 0, 0); return d; };
+export function snoozeChoices(now: Date = new Date(), times: SnoozeTimes = SNOOZE_DEFAULTS): SnoozeChoice[] {
+  const at = (days: number, hhmm: string) => {
+    const [h, m] = hhmm.split(":").map(Number);
+    const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h || 0, m || 0, 0, 0); return d;
+  };
   const out: SnoozeChoice[] = [];
   const later = new Date(now);
-  later.setHours(now.getHours() + 3, 0, 0, 0);
+  later.setHours(now.getHours() + times.later_hours, 0, 0, 0);
   if (later.getDate() === now.getDate() && later.getHours() < 21) out.push({ id: "later", label: "Later today", at: later });
-  out.push({ id: "tomorrow", label: "Tomorrow", at: at(1, 8) });
+  out.push({ id: "tomorrow", label: "Tomorrow", at: at(1, times.tomorrow) });
   const day = now.getDay();
-  out.push({ id: "weekend", label: day === 6 || day === 0 ? "Next weekend" : "This weekend", at: at((6 - day + 7) % 7 || 7, 9) });
-  out.push({ id: "nextweek", label: "Next week", at: at((1 - day + 7) % 7 || 7, 8) });
+  const weekendNow = day === 6 || day === 0;
+  out.push({ id: "weekend", label: weekendNow ? "Next weekend" : "This weekend", at: at((times.weekend_day - day + 7) % 7 || 7, times.weekend_time) });
+  out.push({ id: "nextweek", label: "Next week", at: at((times.week_day - day + 7) % 7 || 7, times.week_time) });
   return out;
 }
 /** An automated message's button: the line `text` shows as a link to `url` (kept for highlights; the hub sends none yet). */
@@ -45,7 +120,29 @@ export interface MailButton { text: string; url: string }
  * in), or null when it has none; `pictures_pending`: the hub is still fetching its web pictures (through Tor);
  * `pictures_ask`: the hub has no Tor, so it fetches them only when asked for this mail's (Show pictures).
  */
-export interface MailMessage extends MailSummary { text: string; links?: MailButton[]; html?: string | null; pictures_pending?: boolean; pictures_ask?: boolean }
+export interface MailMessage extends MailSummary {
+  text: string; links?: MailButton[]; html?: string | null; pictures_pending?: boolean; pictures_ask?: boolean;
+  /** Where the quoted history starts in `text`: folded behind a button. */
+  quote_at?: number;
+}
+
+/**
+ * The quoted history in a mail's page, as mail apps mark it: the hub's page folds it while its body has `aeneas-fold`
+ * (hub/src/mail-html.ts, QUOTE_SELECTOR, kept the same).
+ */
+export const QUOTE_SELECTOR = '.gmail_quote, blockquote[type="cite"], .moz-cite-prefix, .yahoo_quoted, #divRplyFwdMsg, #divRplyFwdMsg ~ *';
+
+/** The hub takes at most this many ids in one Done, Undo or read mark. */
+export const BATCH_MAX = 500;
+/** A list in pieces of at most BATCH_MAX, so a selection of any size goes through. */
+export function batches<T>(items: T[], size = BATCH_MAX): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** How many of a thread's unread messages open by themselves, the newest ones; the rest open with a click. */
+export const OPEN_UNREAD_MAX = 3;
 
 /** A link from inside a mail's page that the app opens: http, https or mailto, nothing else. */
 export function frameLink(href: string | null): string | null {
@@ -62,7 +159,41 @@ export interface MailMailbox { email: string; last_refresh: string | null; last_
 export interface MailMoved { moved: string[]; failed: number; error?: string }
 
 /** `logos`: the verified brand logos the messages use, by domain (a message's `logo_domain`). */
-export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string> }
+export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify }
+
+/** Which new mail notifies (mail from people; bundles switched on, while they show as mail arrives) and what it says. */
+export interface MailNotify { people: boolean; bundles: string[]; detail: "full" | "sender" | "count" }
+export const NOTIFY_DEFAULTS: MailNotify = { people: true, bundles: [], detail: "full" };
+
+/** When a bundle's mail shows in the Inbox: as it arrives, once a day at `time`, once a week on `day` at `time`, never. */
+export interface BundleDelivery { mode: "now" | "daily" | "weekly" | "never"; time?: string; day?: number }
+
+/** When mail that arrived at `at` shows under `d`: the next delivery time from then (null: never). */
+export function deliveryAt(at: string, d: BundleDelivery | undefined): Date | null {
+  const arrived = new Date(at);
+  if (!d || d.mode === "now" || Number.isNaN(arrived.getTime())) return arrived;
+  if (d.mode === "never") return null;
+  const [h, m] = (d.time ?? "00:00").split(":").map(Number);
+  const t = new Date(arrived);
+  t.setHours(h || 0, m || 0, 0, 0);
+  if (d.mode === "daily") { if (t < arrived) t.setDate(t.getDate() + 1); return t; }
+  t.setDate(t.getDate() + (((d.day ?? 0) - t.getDay() + 7) % 7));
+  if (t < arrived) t.setDate(t.getDate() + 7);
+  return t;
+}
+
+/**
+ * When a mail shows in the Inbox, or null while it is held (its bundle shows later) or never there (its bundle skips
+ * the Inbox). Pinned mail always shows; a person's mail is in no bundle.
+ */
+export function inboxAt(m: Pick<MailSummary, "at" | "back_at" | "bundle" | "pinned">, delivery: Record<string, BundleDelivery> = {}, now: Date = new Date()): string | null {
+  const listed = shownAt(m);
+  if (m.pinned || !m.bundle) return listed;
+  const at = deliveryAt(m.at, delivery[m.bundle]);
+  if (!at || at > now) return null;
+  const iso = at.toISOString();
+  return iso > listed ? iso : listed;
+}
 export type MailRefresh = { mailboxes: ({ email: string; kept: number; gone: number; more: boolean } | { email: string; error: string })[] };
 
 /** How a person is named in the list: their name, else their address. */
@@ -75,7 +206,14 @@ export const personLabel = (p: MailAddress) => p.name.trim() || p.address;
  * A bundle: a colored group of one kind of mail. The always-there ones, then the ones tied to a module, shown only while
  * that module is on (`module`), with a link to its screen. `Other` takes automated mail nothing stronger claimed.
  */
-export interface Bundle { id: string; name: string; module?: string; moduleName?: string; screen?: string }
+/** A bundle: built in, a module's, or the owner's own (`custom`: its color, 0 to 7, from the screen's own palette). */
+export interface Bundle { id: string; name: string; module?: string; moduleName?: string; screen?: string; custom?: number }
+
+/** A bundle of the owner's, as the hub keeps it: a name, a color, and its rules. */
+export interface CustomBundle { id: string; name: string; color: number; addresses: string[]; domains: string[]; words: string[] }
+
+/** A bundle's color class: `b-<id>` for the built-in ones, `b-custom ccN` for the owner's. */
+export const bundleClass = (b: Bundle) => (b.custom !== undefined ? `b-custom cc${b.custom}` : `b-${b.id}`);
 export const BUNDLES: Bundle[] = [
   { id: "purchases", name: "Purchases" },
   { id: "trips", name: "Trips" },
@@ -88,7 +226,10 @@ export const BUNDLES: Bundle[] = [
 ];
 
 /** The bundles shown: the always-there ones, and a module's only while it is on. */
-export const shownBundles = (on: (module: string) => boolean) => BUNDLES.filter((b) => !b.module || on(b.module));
+export const shownBundles = (on: (module: string) => boolean, custom: CustomBundle[] = []): Bundle[] => [
+  ...BUNDLES.filter((b) => !b.module || on(b.module)),
+  ...custom.map((c) => ({ id: c.id, name: c.name, custom: c.color })),
+];
 
 /** The bundle a message shows in, or null: an unknown bundle, or one whose module is off, shows the mail on its own. */
 export function bundleOf(m: Pick<MailSummary, "bundle">, shown: Bundle[]): Bundle | null {
@@ -152,19 +293,21 @@ export function matches(m: MailSummary, q: string): boolean {
 }
 
 /** A row of the Inbox: one message, or a bundle with its messages (newest first). */
-export type InboxRow = { kind: "mail"; mail: MailSummary } | { kind: "bundle"; bundle: Bundle; mails: MailSummary[] };
-export interface InboxSection { title: string; rows: InboxRow[] }
+export type InboxRow<T extends MailSummary = MailSummary> = { kind: "mail"; mail: T } | { kind: "bundle"; bundle: Bundle; mails: T[] };
+export interface InboxSection<T extends MailSummary = MailSummary> { title: string; rows: InboxRow<T>[] }
 
 /**
  * The Inbox as the screen lists it: newest first, under day headings. A bundle is one row, where its newest message is
  * in each day; pinned mail always stands on its own. With `pinnedOnly`, only pinned mail, none bundled.
  */
-export function inboxSections(messages: MailSummary[], shown: Bundle[], opts: { pinnedOnly?: boolean; now?: Date } = {}): InboxSection[] {
+export function inboxSections<T extends MailSummary>(messages: T[], shown: Bundle[], opts: { pinnedOnly?: boolean; now?: Date; delivery?: Record<string, BundleDelivery> } = {}): InboxSection<T>[] {
   const now = opts.now ?? new Date();
-  const ms = messages.filter((m) => m.state === "inbox" && (!opts.pinnedOnly || m.pinned)).sort((a, b) => shownAt(b).localeCompare(shownAt(a)));
-  const sections: InboxSection[] = [];
+  // Each mail at the time it shows: held mail (its bundle shows later) and bundles that skip the Inbox are left out.
+  const when = new Map(messages.map((m) => [m, inboxAt(m, opts.delivery, now)]));
+  const ms = messages.filter((m) => m.state === "inbox" && when.get(m) && (!opts.pinnedOnly || m.pinned)).sort((a, b) => when.get(b)!.localeCompare(when.get(a)!));
+  const sections: InboxSection<T>[] = [];
   for (const m of ms) {
-    const title = dayGroup(shownAt(m), now);
+    const title = dayGroup(when.get(m)!, now);
     let s = sections[sections.length - 1];
     if (!s || s.title !== title) { s = { title, rows: [] }; sections.push(s); }
     const b = !m.pinned && !opts.pinnedOnly ? bundleOf(m, shown) : null;
@@ -177,7 +320,7 @@ export function inboxSections(messages: MailSummary[], shown: Bundle[], opts: { 
 }
 
 /** The messages a view lists flat (Snoozed soonest first, Done and a bundle newest first). */
-export function viewMessages(messages: MailSummary[], view: MailView, shown: Bundle[]): MailSummary[] {
+export function viewMessages<T extends MailSummary>(messages: T[], view: MailView, shown: Bundle[]): T[] {
   if (view === "snoozed") return messages.filter((m) => m.state === "snoozed").sort((a, b) => (a.snooze_until ?? "").localeCompare(b.snooze_until ?? ""));
   if (view === "done") return messages.filter((m) => m.state === "done").sort((a, b) => b.at.localeCompare(a.at));
   if (view.startsWith("b:")) return messages.filter((m) => m.state === "inbox" && bundleOf(m, shown)?.id === view.slice(2)).sort((a, b) => shownAt(b).localeCompare(shownAt(a)));
@@ -291,3 +434,73 @@ export function textParts(line: string): TextPart[] {
   return out.length ? out : [{ text: line }];
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Keyboard (desktop): arrow keys to move, letters for actions
+
+export type MailKey = "down" | "up" | "extend-down" | "extend-up" | "open" | "escape" | "select" | "done" | "snooze" | "pin" | "unread" | "read" | "search" | "help";
+
+/** The Mail screen's keys, for the "?" list. */
+export const MAIL_KEYS: ReadonlyArray<{ keys: string; does: string }> = [
+  { keys: "↑ ↓", does: "Previous / next row" },
+  { keys: "Shift + ↑ ↓", does: "Select while moving" },
+  { keys: "Enter", does: "Open the thread, or open or close a bundle" },
+  { keys: "Esc", does: "Close the open thread, then clear the selection" },
+  { keys: "Space", does: "Select or unselect the row" },
+  { keys: "D", does: "Done (Move to Inbox in Done)" },
+  { keys: "S", does: "Snooze" },
+  { keys: "P", does: "Pin or unpin" },
+  { keys: "U / R", does: "Mark unread / read" },
+  { keys: "/", does: "Search mail" },
+  { keys: "?", does: "Show these keys" },
+];
+
+/**
+ * What a key press on the Mail screen does, or null for one it leaves to the rest of the app. Never with Ctrl, Cmd or
+ * Alt, and while typing in a field only Escape (which leaves the field).
+ */
+export function mailKeyAction(e: { key: string; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }, typing: boolean): MailKey | null {
+  if (e.ctrlKey || e.metaKey || e.altKey) return null;
+  if (e.key === "Escape") return "escape";
+  if (typing) return null;
+  switch (e.key) {
+    case "ArrowDown": return e.shiftKey ? "extend-down" : "down";
+    case "ArrowUp": return e.shiftKey ? "extend-up" : "up";
+    case "Enter": return "open";
+    case " ": return "select";
+    case "/": return "search";
+    case "?": return "help";
+  }
+  switch (e.key.toLowerCase()) {
+    case "d": return "done";
+    case "s": return "snooze";
+    case "p": return "pin";
+    case "u": return "unread";
+    case "r": return "read";
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Reminders in the Inbox
+
+/** A reminder that is due, as the Inbox shows it: the task's title and when it came due (its snooze, else its time). */
+export interface DueReminder { id: string; title: string; at: string; friction: string }
+
+/**
+ * The owner's reminders whose time has come (overdue ones too): tasks with a reminder time, not done, not snoozed past
+ * now. A task Mail made for a snoozed mail (`mail`) is left out: the mail itself shows. Earliest first.
+ */
+export function dueReminders(tasks: { id: string; fields: Record<string, unknown> }[], now: Date = new Date()): DueReminder[] {
+  const out: DueReminder[] = [];
+  for (const t of tasks) {
+    const f = t.fields;
+    if (f.status === "done" || typeof f.remind_at !== "string" || typeof f.mail === "string") continue;
+    const snoozed = typeof f.snoozed_until === "string" && f.snoozed_until > f.remind_at ? f.snoozed_until : null;
+    const at = snoozed ?? f.remind_at;
+    const time = Date.parse(at);
+    if (Number.isNaN(time) || time > now.getTime()) continue;
+    out.push({ id: t.id, title: String(f.title ?? "").trim() || "(no title)", at: new Date(time).toISOString(), friction: typeof f.friction === "string" ? f.friction : "none" });
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
+}

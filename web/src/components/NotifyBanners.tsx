@@ -186,6 +186,34 @@ export function DigestToast() {
   );
 }
 
+/** New mail: a `notify` of kind `mail` (sender and subject, or a count, as the owner chose) with a link to Mail. */
+export function MailToast() {
+  const [n, setN] = useState<NotifyEvent | null>(null);
+  useEffect(
+    () =>
+      engine.onNotify((ev: NotifyEvent) => {
+        if (ev.kind !== "mail") return;
+        setN(ev);
+        void notify("Mail", ev.title, "/mail");
+      }),
+    [],
+  );
+  useEffect(() => {
+    if (!n) return;
+    const t = setTimeout(() => setN(null), 12_000);
+    return () => clearTimeout(t);
+  }, [n]);
+  useEscape(useCallback(() => setN(null), []));
+  if (!n) return null;
+  return (
+    <div className="toast mail" role="status" aria-live="polite">
+      <span className="grow">{n.title}</span>
+      <button className="small primary" onClick={() => { setN(null); go("/mail"); }}>Open Mail</button>
+      <button className="small ghost" onClick={() => setN(null)} aria-label="Dismiss">✕</button>
+    </div>
+  );
+}
+
 /** Quiz toast: a `notify` of kind `quiz` (tonight's recall quiz is ready) with a link to Quiz. */
 export function QuizToast() {
   const [n, setN] = useState<NotifyEvent | null>(null);

@@ -612,8 +612,9 @@ public struct NotifyEvent: Equatable, Sendable {
 public enum LiveEvent: Equatable, Sendable {
     case change(seq: Int, id: String, kind: Kind)
     case notify(NotifyEvent)
-    /// A module was switched on or off on some device: the whole list as it is now.
-    case modules([ModuleInfo])
+    /// A module or a kind of alert was switched on or off on some device: both whole lists as they are now. `alerts`
+    /// is nil from a hub that has no alert switches (before 2026-11-20).
+    case modules([ModuleInfo], alerts: [AlertInfo]?)
     case ping
     case unknown(name: String, data: String)
 }

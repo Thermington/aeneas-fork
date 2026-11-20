@@ -24,6 +24,9 @@ public final class SyncEngine: ObservableObject {
     @Published public private(set) var deviceRemoved = false
     /// Whose hub this device is paired with (name and color), kept from the last time the hub said.
     @Published public private(set) var hubIdentity: HubIdentity? = SyncEngine.loadHubIdentity()
+    /// The alert switches from the hub (Settings, Notifications), in its order, starting from the app group's copy.
+    /// Empty from a hub that has none (before 2026-11-20): every kind is then on and Settings lists no switches.
+    @Published public private(set) var alerts: [AlertInfo] = []
     /// Called once when the hub says this device was removed.
     public var onDeviceRemoved: (() -> Void)?
     private var retryTask: Task<Void, Never>?
@@ -46,7 +49,8 @@ public final class SyncEngine: ObservableObject {
     public var onActivityCheckin: ((_ checkin: ActivityCheckin) -> Void)?
     /// Called for `notify` events of kind `digest`: the first line of the day's digest.
     public var onDigest: ((_ title: String) -> Void)?
-    /// Called for `modules` events from `/live`: a switch changed on some device; the whole list as it is now.
+    /// Called for `modules` events from `/live`: a switch changed on some device; the whole list as it is now. The
+    /// alert switches the same event carries are taken in here first (`applyAlerts`).
     public var onModules: ((_ modules: [ModuleInfo]) -> Void)?
     /// Called when what the Watch complications would show changed (the iPhone sends it on to the Watch).
     public var onComplicationSnapshot: ((ComplicationSnapshot) -> Void)?
@@ -94,6 +98,7 @@ public final class SyncEngine: ObservableObject {
             self.store = (try? SyncStore(url: config.storeURL)) ?? (try! SyncStore.inMemory())
         }
         deviceRemoved = platform != .watch && config.deviceRemoved
+        alerts = config.alerts ?? []
         routes.onChange = { [weak self] r in Task { @MainActor in self?.routeChanged(r) } }
         routes.onFound = { [weak self] address, moves in Task { @MainActor in self?.homeFound(address, movesAddress: moves) } }
     }
@@ -426,6 +431,8 @@ public final class SyncEngine: ObservableObject {
         if changedHub {
             // The old hub's module switches are not this hub's: until it answers, nothing of the person's is copied.
             config.modules = nil
+            // Nor are its alert switches: until this hub sends its own, every kind is on.
+            forgetAlerts()
             // The Watch's key belongs to the old hub.
             config.clearWatchKey()
             config.watchDeviceId = ""
@@ -473,6 +480,7 @@ public final class SyncEngine: ObservableObject {
         pulledOnce = false
         AppleLinkRecords.forget()
         config.clearSnapshot()
+        forgetAlerts()
         clearRejected()
         hubIdentity = nil
         UserDefaults.standard.removeObject(forKey: Self.hubIdentityKey)
@@ -522,6 +530,7 @@ public final class SyncEngine: ObservableObject {
         config.linkRoutes = nil
         config.deviceId = ""
         config.clearSnapshot()
+        forgetAlerts()
         route = nil
         status = .unconfigured
         await takeOffPlannedAlerts()
@@ -656,6 +665,7 @@ public final class SyncEngine: ObservableObject {
         entities = [:]
         pulledOnce = false
         config.clearSnapshot()
+        forgetAlerts()
         clearRejected()
         hubIdentity = nil
         UserDefaults.standard.removeObject(forKey: Self.hubIdentityKey)
@@ -962,7 +972,8 @@ public final class SyncEngine: ObservableObject {
                             await self.sync()
                         case .notify(let n):
                             self.handleNotify(n)
-                        case .modules(let list):
+                        case .modules(let list, let alerts):
+                            await self.applyAlerts(alerts)
                             self.onModules?(list)
                         case .ping:
                             if self.status != .online { self.status = .online }
@@ -1002,6 +1013,9 @@ public final class SyncEngine: ObservableObject {
             let cur = currentActivity
             let name = (cur?.logId == logId ? cur?.name : nil) ?? Self.activityName(fromTitle: n.title) ?? cur?.name ?? ""
             let hours = cur.map { Date().timeIntervalSince($0.start) / 3600 } ?? Self.hours(fromTitle: n.title) ?? 0
+            // The hub sends none while Activity check-ins is off (Settings, Notifications). One that was already on
+            // its way when the switch was flipped is held back here.
+            guard config.alertOn(.activity) else { return }
             onActivityCheckin?(ActivityCheckin(logId: logId, name: name, hours: hours, title: n.title))
         case "digest":
             onDigest?(n.title)
@@ -1032,6 +1046,9 @@ public final class SyncEngine: ObservableObject {
         guard let latest = checkins.max() else { return }
         if let seen = seenCheckins[cur.logId], !ISO.isAfter(latest, seen) { return }
         seenCheckins[cur.logId] = latest
+        // The hub still writes the check-in on the log while Activity check-ins is off (Settings, Notifications); it
+        // only sends no alert. Found by a pull, it is this device's own to hold back.
+        guard config.alertOn(.activity) else { return }
         // Only check-ins from the last ten minutes are worth a banner.
         guard let at = ISO.date(latest), Date().timeIntervalSince(at) < 600 else { return }
         let hours = Date().timeIntervalSince(cur.start) / 3600
@@ -1165,13 +1182,45 @@ public final class SyncEngine: ObservableObject {
     }
 
     /// Replace the pending reminder notifications with `notificationPlan`.
-    /// With Reminder alerts off (Settings, Modules) nothing is scheduled and what was planned is taken off.
+    /// With Reminder alerts off (Settings, Modules) or Reminders off (Settings, Notifications) nothing is scheduled
+    /// and what was planned is taken off. The check-in planned for a running activity obeys its switch the same way.
     public func replanNotifications() async {
-        let list = config.moduleOn(.notifications) ? reminders : []
+        let list = config.notifies(.reminder) ? reminders : []
         if let onReplan { onReplan(list); return }
         #if canImport(UserNotifications)
         await ReminderScheduler.shared.replan(reminders: list)
+        await ReminderScheduler.shared.replanActivityCheckin()
         #endif
+    }
+
+    // MARK: alert switches
+
+    /// The kinds this device plans notifications for by itself, ahead of time: a change to one of their switches
+    /// means a replan. Every other kind is shown, or not, when its event comes.
+    private static let plannedKinds: [AlertKind] = [.reminder, .activity]
+
+    /// The alert switches as the hub has them now (`GET /modules`, `PUT /modules/alerts`, or a `modules` event on
+    /// `/live`); nil from a hub that has none, where every kind is on. Kept in the app group, so the notifications
+    /// this device plans itself obey them with no network. Reminders switched off takes this device's planned
+    /// reminder notifications off, as Reminder alerts off in Modules does, and on brings them back.
+    public func applyAlerts(_ list: [AlertInfo]?) async {
+        let before = alerts
+        let now = list ?? []
+        if now != alerts { alerts = now }
+        config.alerts = list
+        if schedulesNotifications, Self.plannedKinds.contains(where: { before.isOn($0) != now.isOn($0) }) { await replanNotifications() }
+    }
+
+    /// Switch kinds of alert on or off for every device; the hub answers with the whole list.
+    public func setAlerts(_ changes: [String: Bool]) async throws {
+        guard let c = client else { throw HubError.notConfigured }
+        await applyAlerts(try await c.setAlerts(changes))
+    }
+
+    /// The switches belonged to a hub this device left (another hub, removed, the sample ended).
+    private func forgetAlerts() {
+        config.alerts = nil
+        if !alerts.isEmpty { alerts = [] }
     }
 
     /// Tests: stands in for the notification center, given the reminders a replan plans from.

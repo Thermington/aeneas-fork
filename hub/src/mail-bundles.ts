@@ -1,4 +1,7 @@
+import crypto from "node:crypto";
+import type { DB } from "./db.js";
 import type { Hub } from "./hub.js";
+import { StoreError } from "./store.js";
 import type { ModuleId } from "./modules.js";
 
 /**
@@ -40,7 +43,88 @@ export interface BundleContext {
   bills: { title: string; url: string | null }[] | null;
   /** Pet: the pets' names. */
   pets: string[] | null;
+  /** The owner's own bundles, checked before every other rule. */
+  custom?: CustomBundle[];
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The owner's own bundles (since 2026-11-20)
+
+/**
+ * A bundle of the owner's: a name, one of the screen's eight colors, and rules: mail from one of `addresses`, from one
+ * of `domains` (or a domain under it), or whose subject has one of `words` (whole words). Checked before the built-in
+ * rules, so the owner's wins; unlike those, it may take a person's mail ("Family": a sister's address).
+ */
+export interface CustomBundle { id: string; name: string; color: number; addresses: string[]; domains: string[]; words: string[] }
+export const CUSTOM_MAX = 20;
+const LIST_MAX = 30;
+
+/** The owner's bundles. */
+export function customBundles(db: DB): CustomBundle[] {
+  const r = db.prepare("SELECT value FROM settings WHERE key = 'custom_bundles'").get() as { value: string } | undefined;
+  try { return r ? JSON.parse(r.value) as CustomBundle[] : []; } catch { return []; }
+}
+const saveAll = (db: DB, all: CustomBundle[]) => db.prepare("INSERT INTO settings (key, value) VALUES ('custom_bundles', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(all));
+
+/** A bundle's fields from a request, checked: a name, a color 0 to 7, and at least one rule. */
+function checked(body: Record<string, unknown>): Omit<CustomBundle, "id"> {
+  const name = typeof body.name === "string" ? body.name.replace(/\s+/g, " ").trim() : "";
+  if (!name || name.length > 40) throw new StoreError(422, "name is 1 to 40 characters");
+  if (!Number.isInteger(body.color) || (body.color as number) < 0 || (body.color as number) > 7) throw new StoreError(422, "color is 0 to 7");
+  const list = (v: unknown, what: string, ok: (s: string) => boolean) => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v) || v.length > LIST_MAX || !v.every((x) => typeof x === "string")) throw new StoreError(422, `${what} is a list of at most ${LIST_MAX}`);
+    const out = [...new Set((v as string[]).map((x) => x.trim().toLowerCase()).filter(Boolean))];
+    const bad = out.find((x) => !ok(x));
+    if (bad !== undefined) throw new StoreError(422, `${what}: "${bad.slice(0, 60)}" is not one`);
+    return out;
+  };
+  const addresses = list(body.addresses, "addresses", (x) => x.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+  const domains = list(body.domains, "domains", (x) => x.length <= 253 && /^([a-z0-9-]+\.)+[a-z]{2,}$/.test(x.replace(/^@/, ""))).map((x) => x.replace(/^@/, ""));
+  const words = list(body.words, "words", (x) => x.length <= 60);
+  if (!addresses.length && !domains.length && !words.length) throw new StoreError(422, "a bundle needs at least one address, domain or word");
+  return { name, color: body.color as number, addresses, domains, words };
+}
+
+export function addCustomBundle(db: DB, body: Record<string, unknown>): CustomBundle {
+  const all = customBundles(db);
+  if (all.length >= CUSTOM_MAX) throw new StoreError(409, `at most ${CUSTOM_MAX} bundles of your own`);
+  const b = { id: `c-${crypto.randomBytes(5).toString("hex")}`, ...checked(body) };
+  saveAll(db, [...all, b]);
+  return b;
+}
+
+export function updateCustomBundle(db: DB, id: string, body: Record<string, unknown>): CustomBundle {
+  const all = customBundles(db);
+  const i = all.findIndex((b) => b.id === id);
+  if (i < 0) throw new StoreError(404, "there is no such bundle");
+  all[i] = { id, ...checked(body) };
+  saveAll(db, all);
+  return all[i];
+}
+
+export function deleteCustomBundle(db: DB, id: string): void {
+  const all = customBundles(db);
+  if (!all.some((b) => b.id === id)) throw new StoreError(404, "there is no such bundle");
+  saveAll(db, all.filter((b) => b.id !== id));
+}
+
+/** The owner's bundle a mail is in, or null: the first whose rules match. */
+export function customBundleOf(mail: BundleMail, custom: CustomBundle[]): string | null {
+  const address = mail.from.address.toLowerCase();
+  const domain = domainOf(address);
+  for (const b of custom) {
+    if (b.addresses.includes(address)) return b.id;
+    if (b.domains.some((d) => domain === d || domain.endsWith(`.${d}`))) return b.id;
+    if (b.words.length && hasWord(mail.subject, b.words)) return b.id;
+  }
+  return null;
+}
+
+/** Every bundle's id, the built-in ones and the module ones. */
+export const BUNDLE_IDS = ["purchases", "trips", "social", "promos", "bills", "pet", "jobs", "other"] as const;
+/** Their names, as the screen shows them (for notifications). */
+export const BUNDLE_NAMES: Record<string, string> = { purchases: "Purchases", trips: "Trips", social: "Social", promos: "Promos", bills: "Bills", pet: "Pet", jobs: "Jobs", other: "Other" };
 
 /** No modules on: only the bundles every mail can have. */
 export const NO_MODULES: BundleContext = { jobs: null, bills: null, pets: null };
@@ -53,6 +137,7 @@ export function bundleContext(hub: Hub): BundleContext {
     jobs: on("jobs") ? hub.store.list({ kind: "application", limit: 100000 }).map((e) => ({ company: str(e.fields.company) ?? "", url: str(e.fields.url) })).filter((j) => j.company || j.url) : null,
     bills: on("renewals") ? hub.store.list({ kind: "watch", limit: 100000 }).map((e) => ({ title: str(e.fields.title) ?? "", url: str(e.fields.url) })).filter((b) => b.title || b.url) : null,
     pets: on("pet") ? [...new Set(hub.store.list({ kind: "pet_event", limit: 100000 }).map((e) => str(e.fields.pet)).filter((p): p is string => !!p))] : null,
+    custom: customBundles(hub.mailDb),
   };
 }
 
@@ -166,6 +251,10 @@ export function bundleOf(mail: BundleMail, ctx: BundleContext): string | null {
    * name of 4 or more letters is looked for inside a domain: "box" is inside dropbox.com, "ea" inside most domains.
    */
   const named = (record: string) => record !== "" && (hasWord(name, [record]) || (record.length >= 4 && domain.includes(record.toLowerCase())));
+
+  // 0. The owner's own bundles first: theirs wins, a person's mail included.
+  const own = ctx.custom?.length ? customBundleOf(mail, ctx.custom) : null;
+  if (own) return own;
 
   // 1. Jobs: the one rule that takes a person's mail too, since a recruiter writes as a person.
   if (ctx.jobs) {

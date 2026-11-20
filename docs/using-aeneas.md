@@ -90,7 +90,18 @@ those modules are on. A person's mail stands on its own.
 - **Snooze** hides a mail until a time you pick and makes a task called "Snoozed mail", which holds none of the mail's
   words (tasks are open to the assistant; mail is not). The Snoozed list on the Mail screen says which mail it is. The mail comes back to the
   top of the Inbox at that time, or as soon as you finish or delete the task.
-- Nothing is marked read in iCloud, and Done is the only change the hub makes there.
+- **Read and unread** are the same here and in iCloud, both ways: mail you read in Apple Mail shows as read here, and
+  opening a mail here (or Mark unread) changes it in iCloud. That flag and Done's move are the only two changes the
+  hub makes to your mailbox.
+- **Threads.** A back-and-forth is one row that opens with its messages stacked, your own replies among them (the hub
+  reads your Sent folder, read-only, and keeps only the replies that belong to mail it keeps). Earlier messages quoted
+  inside a reply are folded behind "•••". Pin and Snooze act on the whole thread.
+- **Bundles your way.** Each bundle can show in the Inbox as mail arrives, once a day, once a week or never, and you
+  can make bundles of your own from senders, domains and words in the subject.
+- **New-mail alerts** are for mail from people to start with; a bundle's alerts are switched on in that bundle. They
+  say the sender and subject, the sender only, or a count, as you choose on the Mail screen. Like every alert, they
+  are switched off altogether in Settings, Notifications.
+- **Keys.** Arrow keys and single letters work on the Mail screen; the Keyboard keys button lists them.
 - The mail is kept on the hub only while it is in your Inbox (done mail for 30 days), never in a backup, and the
   assistant cannot read it. Switching the module off deletes it from the hub at once.
 - **Pictures in mail.** The hub fetches them through Tor when a mail arrives, so opening a mail loads nothing, and a
@@ -113,6 +124,14 @@ those modules are on. A person's mail stands on its own.
 These are read on the Apple devices: the Apple Reminders and Contacts modules (Settings, Modules), and Apple Health,
 turned on in the iPhone app under Settings, Connections. Health works both ways: readings come in, and what you log
 in Aeneas goes to Health.
+
+## Alerts
+
+Aeneas alerts you about reminders, the morning summary, a long activity, new mail, machines and services, sensor
+readings, the hub's disk and the recall quiz. Each kind is switched on or off by itself in Settings, Notifications,
+once for every device: the hub holds back a kind you switched off, so no phone, computer or Watch shows it. Off
+stops the alert only; the feature it belongs to goes on working (Mail still shows your mail, a sensor still records).
+A kind is listed while the module it belongs to is on.
 
 ## Capture
 

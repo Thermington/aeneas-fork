@@ -81,12 +81,18 @@ export function adminRoutes() {
   });
 
   // Modules (modules.ts): which parts of the app are on, one setting for every device.
-  r.get("/modules", (c) => c.json({ modules: c.get("hub").modules.list() }));
+  r.get("/modules", (c) => c.json({ modules: c.get("hub").modules.list(), alerts: c.get("hub").alerts.list() }));
+  // Each kind of alert, switched on or off on its own (alerts.ts). Under /modules, so the assistant cannot change it.
+  r.put("/modules/alerts", async (c) => {
+    const hub = c.get("hub");
+    const body = await readJsonObject<Record<string, unknown>>(c);
+    try { return c.json({ alerts: hub.alerts.set(body) }); } catch (e) { throw new StoreError(422, (e as Error).message); }
+  });
   r.put("/modules", async (c) => {
     const hub = c.get("hub");
     const body = await readJsonObject<Record<string, unknown>>(c);
     try { hub.modules.set(body); } catch (e) { throw new StoreError(422, (e as Error).message); }
-    return c.json({ modules: hub.modules.list() });
+    return c.json({ modules: hub.modules.list(), alerts: hub.alerts.list() });
   });
 
   r.get("/applications/board", (c) => c.json(applicationBoard(c.get("hub").store)));

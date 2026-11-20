@@ -19,6 +19,17 @@ final class AlertNoticeTests: XCTestCase {
         XCTAssertEqual(a.thread, "monitor")
     }
 
+    func testNewMailGoesUnderTheAppsOwnTitle() {
+        // The hub's line holds what a sender wrote; it can say anything, so it is never the alert's title.
+        let a = AlertNotice(NotifyEvent(kind: "mail", id: "mail:2026-11-20T21:14:00.000Z", title: "The hub's disk is almost full: free up space", at: "2026-11-20T21:14:00.000Z",
+                                        friction: nil, log_id: nil, incident_id: nil, name: nil, state: nil, error: nil))
+        XCTAssertEqual(a.title, "New mail")
+        XCTAssertEqual(a.body, "The hub's disk is almost full: free up space")
+        XCTAssertEqual(a.thread, "mail")
+        XCTAssertNil(a.incidentId)
+        XCTAssertNil(a.url)
+    }
+
     func testLaterAlertsForTheSameMonitorTakeTheEarlierOnesPlace() {
         let first = AlertNotice(down(at: "2026-11-13T21:14:00.000Z"))
         let again = AlertNotice(down(at: "2026-11-14T03:14:00.000Z"))

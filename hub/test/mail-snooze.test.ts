@@ -90,6 +90,21 @@ test("mail snooze: marking its task done or deleting it brings the mail back at 
   } finally { done(t); }
 });
 
+test("mail snooze: the owner's own snooze times are kept on the hub, checked, and sent with the list", async () => {
+  const { t } = await setUp();
+  try {
+    const first = await (await t.api("/mail")).json() as { snooze_times: Record<string, unknown> };
+    assert.deepEqual(first.snooze_times, { later_hours: 3, tomorrow: "08:00", weekend_day: 6, weekend_time: "09:00", week_day: 1, week_time: "08:00" });
+    const r = await t.api("/mail/settings/snooze", { method: "PUT", json: { later_hours: 2, tomorrow: "07:30", weekend_day: 0 } });
+    assert.deepEqual(await r.json(), { later_hours: 2, tomorrow: "07:30", weekend_day: 0, weekend_time: "09:00", week_day: 1, week_time: "08:00" });
+    assert.equal(((await (await t.api("/mail")).json()) as { snooze_times: { tomorrow: string } }).snooze_times.tomorrow, "07:30");
+    for (const bad of [{ later_hours: 0 }, { later_hours: 2.5 }, { tomorrow: "7:30" }, { tomorrow: "25:00" }, { week_day: 7 }, { weekend_time: "noon" }]) {
+      assert.equal((await t.api("/mail/settings/snooze", { method: "PUT", json: bad })).status, 422, JSON.stringify(bad));
+    }
+    assert.ok(refuseToolCall("PUT", "/mail/settings/snooze"));
+  } finally { done(t); }
+});
+
 test("mail snooze: times from now to a year ahead only; only kept Inbox mail; the assistant cannot snooze", async () => {
   const { t } = await setUp();
   try {

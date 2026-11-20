@@ -30,7 +30,7 @@ extension SharedConfig {
     public func clearSnapshot() {
         let d = privacyDefaults
         for k in ["now.id", "now.title", "now.status", "now.timing", "now.blockEnd", "now.donePending", "nextUp.title", "nextUp.at", "nextBlock.title", "nextBlock.start",
-                  "activity.name", "activity.start", "captures.unprocessed", "snapshot.updated", "modules.cache", "feel.cache", "feel.pending"] {
+                  "activity.name", "activity.start", "captures.unprocessed", "snapshot.updated", "modules.cache", "alerts.cache", "feel.cache", "feel.pending"] {
             d.removeObject(forKey: k)
         }
     }

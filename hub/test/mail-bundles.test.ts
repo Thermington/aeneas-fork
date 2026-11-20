@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeHub } from "./helpers.js";
-import { bundleContext, bundleOf, domainOf, hasWord, hostOf, NO_MODULES, sameSite, type BundleContext, type BundleMail } from "../src/mail-bundles.js";
+import { bundleContext, bundleOf, domainOf, hasWord, hostOf, NO_MODULES, sameSite, type BundleContext, type BundleMail, type CustomBundle } from "../src/mail-bundles.js";
+import { refuseToolCall } from "../src/ai/api-guard.js";
 
 // The Mail screen's bundles (src/mail-bundles.ts). Every mail here is made up.
 
@@ -50,8 +51,59 @@ test("mail bundles context: records come only from modules that are on", async (
   } finally { t.cleanup(); }
 });
 
+test("mail bundles: when each bundle shows in the Inbox is kept on the hub, checked, and sent with the list", async () => {
+  const t = makeHub();
+  try {
+    await t.api("/modules", { method: "PUT", json: { mail_inbox: true } });
+    const put = (id: string, body: unknown) => t.api(`/mail/settings/bundles/${id}`, { method: "PUT", json: body });
+    assert.deepEqual(await (await put("promos", { mode: "daily", time: "07:00" })).json(), { promos: { mode: "daily", time: "07:00" } });
+    assert.deepEqual(await (await put("social", { mode: "weekly", day: 0, time: "18:00" })).json(), { promos: { mode: "daily", time: "07:00" }, social: { mode: "weekly", time: "18:00", day: 0 } });
+    assert.deepEqual(await (await put("social", { mode: "now" })).json(), { promos: { mode: "daily", time: "07:00" } }, "as it arrives is no setting");
+    await put("other", { mode: "never" });
+    const list = await (await t.api("/mail")).json() as { bundle_delivery: Record<string, unknown> };
+    assert.deepEqual(list.bundle_delivery, { promos: { mode: "daily", time: "07:00" }, other: { mode: "never" } });
+    assert.equal((await put("made-up", { mode: "never" })).status, 404);
+    for (const bad of [{}, { mode: "sometimes" }, { mode: "daily" }, { mode: "daily", time: "7am" }, { mode: "weekly", time: "07:00" }, { mode: "weekly", time: "07:00", day: 9 }]) {
+      assert.equal((await put("promos", bad)).status, 422, JSON.stringify(bad));
+    }
+  } finally { t.cleanup(); }
+});
+
+test("mail bundles: the owner's own bundles are checked first, take a person's mail, and are checked when saved", async () => {
+  const t = makeHub();
+  try {
+    await t.api("/modules", { method: "PUT", json: { mail_inbox: true } });
+    const add = (body: unknown) => t.api("/mail/settings/custom-bundles", { method: "POST", json: body });
+    const school = await (await add({ name: " School ", color: 2, domains: ["@school.example"], words: ["field trip"] })).json() as CustomBundle;
+    assert.match(school.id, /^c-[0-9a-f]{10}$/);
+    assert.deepEqual({ ...school, id: "" }, { id: "", name: "School", color: 2, addresses: [], domains: ["school.example"], words: ["field trip"] });
+    const family = await (await add({ name: "Family", color: 5, addresses: ["Sam@Example.com"] })).json() as CustomBundle;
+    const ctx = { ...NO_MODULES, custom: [school, family] };
+    assert.equal(bundleOf(sys("news@mail.school.example", "Weekly news", { unsubscribe: true }), ctx), school.id, "a domain under it; before Promos");
+    assert.equal(bundleOf(sys("deals@shop.example", "Field trip gear sale", { unsubscribe: true }), ctx), school.id, "a word in the subject");
+    assert.equal(bundleOf(person("Sam", "sam@example.com", "Dinner?"), ctx), family.id, "a person's mail, by address");
+    assert.equal(bundleOf(person("Alex", "alex@example.com", "Dinner?"), ctx), null);
+    assert.equal(bundleOf(sys("x@notschool.example", "Hi", { unsubscribe: true }), ctx), "promos", "notschool.example is not under school.example");
+
+    assert.equal((await t.api(`/mail/settings/bundles/${school.id}`, { method: "PUT", json: { mode: "never" } })).status, 200, "a bundle of yours has Show in Inbox too");
+    const list = await (await t.api("/mail")).json() as { custom_bundles: CustomBundle[]; bundle_delivery: Record<string, unknown> };
+    assert.deepEqual(list.custom_bundles.map((b) => b.name), ["School", "Family"]);
+    assert.equal((await t.api(`/mail/settings/custom-bundles/${school.id}`, { method: "PUT", json: { name: "School stuff", color: 3, words: ["pta"] } })).status, 200);
+    assert.equal((await t.api(`/mail/settings/custom-bundles/${school.id}`, { method: "DELETE" })).status, 200);
+    const after = await (await t.api("/mail")).json() as { custom_bundles: CustomBundle[]; bundle_delivery: Record<string, unknown> };
+    assert.deepEqual(after.custom_bundles.map((b) => b.name), ["Family"]);
+    assert.equal(after.bundle_delivery[school.id], undefined, "its setting went with it");
+
+    for (const bad of [{ color: 1, words: ["x"] }, { name: "x".repeat(41), color: 1, words: ["x"] }, { name: "A", color: 8, words: ["x"] }, { name: "A", color: 1 }, { name: "A", color: 1, addresses: ["not an address"] }, { name: "A", color: 1, domains: ["no spaces.example"] }]) {
+      assert.equal((await add(bad)).status, 422, JSON.stringify(bad));
+    }
+    assert.equal((await t.api("/mail/settings/custom-bundles/c-0000000000", { method: "DELETE" })).status, 404);
+    assert.ok(refuseToolCall("POST", "/mail/settings/custom-bundles"));
+  } finally { t.cleanup(); }
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
-// The rules (these fail until bundleOf is written)
+// The rules
 
 test("mail bundles: a person's mail stands alone, whatever its subject says", () => {
   assert.equal(bundleOf(person("Alex", "alex@example.com", "Hike Saturday?"), ALL), null);

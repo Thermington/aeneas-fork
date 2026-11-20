@@ -2,7 +2,7 @@ import { Suspense, useEffect, type ReactNode } from "react";
 import type { Route } from "./lib/router";
 import { ScreenStart, Shell, screenOf } from "./components/Shell";
 import { ReminderBanner } from "./components/ReminderBanner";
-import { ActivityBanner, DigestToast, DiskBanner, AppUpdateBanner, MonitorBanner, QuizToast, SensorBanner } from "./components/NotifyBanners";
+import { ActivityBanner, DigestToast, DiskBanner, AppUpdateBanner, MailToast, MonitorBanner, QuizToast, SensorBanner } from "./components/NotifyBanners";
 import { UpdateToast } from "./components/UpdateToast";
 import { IfModule, ModuleGate } from "./components/ModuleGate";
 import { HelperOfferBanner } from "./components/HelperOffer";
@@ -36,6 +36,7 @@ export function MainWindow({ route, view }: { route: Route; view: ReactNode }) {
       <UpdateToast />
       <DigestToast />
       <IfModule id="quiz"><QuizToast /></IfModule>
+      <IfModule id="mail_inbox"><MailToast /></IfModule>
     </Shell>
   );
 }

@@ -19,7 +19,7 @@ test("icloud inbox: reads only the Inbox, read-only, and says which messages are
       { uid: 5, folder: "Junk", at: ago(1), subject: "You won", from: { address: "spam@example.com" }, plain: "x" },
     ]);
     const r = await listInboxICloud(t.hub, ACCOUNT, ago(90), none, none);
-    assert.deepEqual(seen.opened, [{ path: "INBOX", readOnly: true }], "only the Inbox, with EXAMINE, never SELECT");
+    assert.deepEqual(seen.opened, [{ path: "INBOX", readOnly: true }, { path: "Sent Messages", readOnly: true }], "the Inbox, then Sent for the owner's replies, both with EXAMINE, never SELECT");
     assert.deepEqual(r.present, ["7:1:INBOX", "7:2:INBOX"], "every message in the Inbox, however old");
     assert.deepEqual(r.mails.map((m) => m.subject), ["Gutters"], "only the last 90 days are fetched");
     const m = r.mails[0];
@@ -31,8 +31,8 @@ test("icloud inbox: reads only the Inbox, read-only, and says which messages are
     // Only the calls the read-only client type has, every connection closed.
     assert.equal(seen.connects, 1);
     assert.equal(seen.logouts, 1);
-    assert.deepEqual([...new Set(seen.calls)].sort(), ["connect", "download", "fetchOne", "list", "logout", "mailboxOpen", "search"]);
-    assert.deepEqual(seen.fetches[0], { query: { envelope: true, bodyStructure: true, internalDate: true, headers: ["list-unsubscribe", "list-id", "auto-submitted", "precedence", "authentication-results", "bimi-location", "feedback-id", "x-mailgun-sid", "x-sg-eid", "x-ses-outgoing", "x-mc-user", "x-pm-message-id", "x-msys-api"] }, o: { uid: true } });
+    assert.deepEqual([...new Set(seen.calls)].sort(), ["connect", "download", "fetch", "fetchOne", "list", "logout", "mailboxOpen", "search"]);
+    assert.deepEqual(seen.fetches[0], { query: { envelope: true, bodyStructure: true, internalDate: true, headers: ["list-unsubscribe", "list-id", "auto-submitted", "precedence", "authentication-results", "bimi-location", "references", "feedback-id", "x-mailgun-sid", "x-sg-eid", "x-ses-outgoing", "x-mc-user", "x-pm-message-id", "x-msys-api"] }, o: { uid: true } });
   } finally { done(t); }
 });
 

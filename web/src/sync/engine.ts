@@ -1,7 +1,7 @@
 import { plainError } from "../lib/errors";
 import type { Entity, Patch } from "@everythingapp/shared";
 import { db as defaultDb, EADatabase, META, getMeta, setMeta, type OutboxItem, type RejectedEdit } from "./db";
-import { HubClient, HubError, isDeviceKey, readSse, type FetchLike, type ModuleInfo } from "./api";
+import { HubClient, HubError, isDeviceKey, readSse, type AlertInfo, type FetchLike, type ModuleInfo } from "./api";
 import { applyPatchLocal, mergeIncoming, planFlush, rejectedIds } from "./merge";
 import { celebrate } from "../feel/events";
 import { hubFetch } from "./direct";
@@ -69,6 +69,7 @@ export class SyncEngine {
   private listeners = new Set<Listener>();
   private notifyListeners = new Set<(n: NotifyEvent) => void>();
   private moduleListeners = new Set<(m: ModuleInfo[]) => void>();
+  private alertListeners = new Set<(a: AlertInfo[]) => void>();
   private fetchImpl: FetchLike;
   private platform: () => string;
   private deviceName: () => string;
@@ -111,6 +112,12 @@ export class SyncEngine {
   onModules(fn: (m: ModuleInfo[]) => void): () => void {
     this.moduleListeners.add(fn);
     return () => this.moduleListeners.delete(fn);
+  }
+
+  /** Alert switches changed on some device (they come with `event: modules` on /live). */
+  onAlerts(fn: (a: AlertInfo[]) => void): () => void {
+    this.alertListeners.add(fn);
+    return () => this.alertListeners.delete(fn);
   }
 
   onNotify(fn: (n: NotifyEvent) => void): () => void {
@@ -606,8 +613,11 @@ export class SyncEngine {
         this.set({ live: true });
         this.liveHeard = Date.now();
         // A switch changed while the stream was down sent its event to no one: read the list again.
-        if (this.moduleListeners.size) {
-          this.client!.modules().then((r) => { for (const l of this.moduleListeners) l(r.modules); }).catch(() => undefined);
+        if (this.moduleListeners.size || this.alertListeners.size) {
+          this.client!.modules().then((r) => {
+            for (const l of this.moduleListeners) l(r.modules);
+            if (Array.isArray(r.alerts)) for (const l of this.alertListeners) l(r.alerts);
+          }).catch(() => undefined);
         }
         // A stream can die without closing (sleep, network change): after 70 s of silence, open a new one.
         watchdog = setInterval(() => {
@@ -628,8 +638,9 @@ export class SyncEngine {
           if (ev.event === "change") this.schedulePull();
           else if (ev.event === "modules") {
             try {
-              const m = (JSON.parse(ev.data) as { modules?: ModuleInfo[] }).modules;
-              if (Array.isArray(m)) for (const l of this.moduleListeners) l(m);
+              const d = JSON.parse(ev.data) as { modules?: ModuleInfo[]; alerts?: AlertInfo[] };
+              if (Array.isArray(d.modules)) for (const l of this.moduleListeners) l(d.modules);
+              if (Array.isArray(d.alerts)) for (const l of this.alertListeners) l(d.alerts);
             } catch {
               /* ignore malformed */
             }

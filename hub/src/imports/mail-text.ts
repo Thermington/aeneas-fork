@@ -143,6 +143,52 @@ export function readableHtml(html: string, links: "marks" | "text", plain = ""):
     links === "marks" ? `[${label}](${url})` : `${label} (${url})`);
 }
 
+/** The line a mail app writes above a quoted reply ("On Fri, Nov 13 … Robin <robin@…> wrote:", and its French and German). */
+const QUOTE_INTRO = [/^on\b.{4,400}\bwrote:?$/i, /^le\b.{4,400}\ba écrit ?:$/i, /^am\b.{4,400}\bschrieb\b.{0,400}:$/i];
+/** Outlook's quoted reply: its separator, or a header block (From: then Sent: or Date: within the next three lines). */
+const ORIGINAL = /^-{2,}\s*original message\s*-{2,}$/i;
+/** The line a mail app writes above a forwarded mail. */
+const FORWARD_HEAD = /^(-{2,} ?forwarded message ?-{2,}|begin forwarded message:?)$/i;
+
+/**
+ * A message's own words: its text up to the quoted history a reply carries below them (a line like "On … wrote:",
+ * also split over up to three lines; lines starting with `>`; Outlook's "Original Message" or its From/Sent block).
+ * The whole text when cutting would leave nothing (a mail that is only a quote, or a forward).
+ */
+export function ownWords(text: string): string {
+  const at = quoteStart(text);
+  return at < 0 ? text : text.slice(0, at).trim();
+}
+
+/**
+ * Where a message's quoted history starts in its text (see ownWords), or -1 when it has none, or when it is all quote
+ * (nothing would be left above it).
+ */
+export function quoteStart(text: string): number {
+  const lines = text.split("\n");
+  let cut = -1;
+  for (let i = 0; i < lines.length && cut < 0; i++) {
+    const l = lines[i].trim();
+    if (!l) continue;
+    if (l.startsWith(">") || ORIGINAL.test(l)) { cut = i; break; }
+    if (/^from:\s/i.test(l) && lines.slice(i + 1, i + 4).some((x) => /^(sent|date):\s/i.test(x.trim()))) { cut = i; break; }
+    if (!/^(on|le|am)\b/i.test(l)) continue;
+    for (let n = 1; n <= 3 && i + n <= lines.length; n++) {
+      const joined = lines.slice(i, i + n).map((x) => x.trim()).join(" ");
+      if (QUOTE_INTRO.some((re) => re.test(joined))) { cut = i; break; }
+    }
+  }
+  if (cut < 0) return -1;
+  const before = lines.slice(0, cut).join("\n");
+  // Nothing above it, or a forward's heading ("---------- Forwarded message ---------", "Begin forwarded message:"):
+  // the mail is what follows, and cutting there left a forward with a heading for its words.
+  // A forward is not a reply's history either way: with a note above the heading, the forwarded mail is still what
+  // the mail is about, and it stays in view.
+  const above = before.split("\n").map((x) => x.trim()).filter(Boolean);
+  if (!above.length || above.some((x) => FORWARD_HEAD.test(x))) return -1;
+  return before.length + (cut > 0 ? 1 : 0);
+}
+
 /** A text part that is really HTML: five or more layout tags or comments (a text that mentions one tag is not). */
 export function looksLikeHtml(s: string): boolean {
   const head = s.slice(0, 512 * 1024);

@@ -17,8 +17,9 @@ export type { InboxMail, MailAddress, MoveRef } from "./inbox-source.js";
  * checks; nothing a request, setting or the assistant sends can change that.
  *
  * Read-only for real: every folder is opened with EXAMINE, message parts are fetched with BODY.PEEK (nothing is marked
- * read), and nothing here stores, copies, appends, expunges or deletes. The one write is moveICloud, the Mail screen's
- * Done and its Undo: an IMAP MOVE of a kept message between the Inbox and the Archive folder, nothing else (see there). Only text parts are fetched, capped,
+ * read), and nothing here stores, copies, appends, expunges or deletes. The Mail screen's two writes are fenced each in a
+ * function of its own: moveICloud (Done and Undo: an IMAP MOVE of a kept message between the Inbox and the Archive folder)
+ * and setSeenICloud (opening a mail or Mark unread: the `\Seen` flag added or removed, no other flag). Only text parts are fetched, capped,
  * and for the Mail screen the pictures a mail's HTML shows from inside it (`cid:`), never other attachments. For receipts, mail is read in memory and never stored, as for Gmail; the Mail screen's listing
  * (listInboxICloud) hands the Inbox's mail to mail-inbox.ts, which keeps its text while it is in the Inbox.
  */
@@ -94,6 +95,8 @@ export interface ImapClient {
   /** `headers` names header lines to fetch (with BODY.PEEK, like everything here): only the Mail screen asks for them. */
   fetchOne(uid: string, query: { envelope: true; bodyStructure: true; internalDate: true; headers?: string[] }, options: { uid: true }): Promise<ImapMessage | false>;
   download(uid: string, part: string, options: { uid: true; maxBytes: number }): Promise<{ content?: NodeJS.ReadableStream } | undefined>;
+  /** Each message's flags (`FETCH FLAGS`, which reads and changes nothing): only the Mail screen asks, for read and unread. */
+  fetch?(range: string, query: { uid: true; flags: true }, options: { uid: true }): AsyncIterable<{ uid: number; flags?: Set<string> }>;
 }
 export interface ImapLogin { user: string; pass: string }
 /**
@@ -105,6 +108,9 @@ export interface ImapMover {
   mailboxOpen(path: string, options: { readOnly: false }): Promise<{ uidValidity: bigint }>;
   /** imapflow's MOVE: `uidMap` gives each message's new UID in the destination (UIDPLUS, which iCloud has). */
   messageMove(uid: string, destination: string, options: { uid: true }): Promise<{ uidValidity?: bigint; uidMap?: Map<number, number> } | false>;
+  /** STORE +FLAGS / -FLAGS of `\Seen` only: the type takes no other flag (setSeenICloud). */
+  messageFlagsAdd(uid: string, flags: ["\\Seen"], options: { uid: true }): Promise<boolean>;
+  messageFlagsRemove(uid: string, flags: ["\\Seen"], options: { uid: true }): Promise<boolean>;
 }
 
 const realClient = (login: ImapLogin): ImapClient => new ImapFlow({
@@ -348,6 +354,10 @@ export async function readICloud(hub: Hub, accountKey: string, id: string): Prom
 // ---------------------------------------------------------------------------------------------------------------------
 // The Mail screen (mail-inbox.ts): the Inbox folder's mail. Read-only as above: EXAMINE, BODY.PEEK (headers too).
 
+/** At most this many kept messages have their thread headers read per refresh (mail kept before threads). */
+const REFS_MAX = 500;
+/** At most this many sent messages are looked at per refresh (their headers); the rest come on the next. */
+export const SENT_SCAN_MAX = 500;
 /** At most this many new messages are fetched per mailbox per refresh, newest first; the rest come on the next. */
 export const INBOX_MAX = 300;
 /** How far back the Mail screen looks for mail it does not have yet (the first refresh brings in this much). */
@@ -358,7 +368,9 @@ export const TEXT_MAX = 100_000;
  * Header lines fetched by name: whether a system sent the mail (a list, a notice, a newsletter), which the Mail screen
  * sorts by. The envelope has the rest (From, Reply-To, Subject, Message-ID).
  */
-const INBOX_HEADERS = ["list-unsubscribe", "list-id", "auto-submitted", "precedence", "authentication-results", "bimi-location", ...ESP_HEADERS()];
+const INBOX_HEADERS = ["list-unsubscribe", "list-id", "auto-submitted", "precedence", "authentication-results", "bimi-location", "references", ...ESP_HEADERS()];
+/** The Message-IDs a message answers: its References, then In-Reply-To (at most 50). */
+const answers = (msg: ImapMessage) => [...new Set([...messageIds(headerValue(msg.headers, "references")), ...messageIds(msg.envelope?.inReplyTo)])].slice(-50);
 /**
  * Headers only bulk-mail services add: Feedback-Id (which large senders must send), and the sending services' own
  * (Mailgun, SendGrid, Amazon SES, Mailchimp, Postmark, SparkPost). A function so INBOX_HEADERS can use it above.
@@ -465,6 +477,8 @@ function inboxMail(id: string, msg: ImapMessage, text: string, shown: { html: st
     html: shown && shown.html.length - (shown.pictures ?? 0) <= HTML_MAX ? shown.html : null,
     remote: shown && shown.html.length - (shown.pictures ?? 0) <= HTML_MAX ? shown.remote : [],
     logo: verifiedLogo(msg.headers, from.address),
+    refs: answers(msg),
+    mine: false,
   };
 }
 
@@ -529,24 +543,35 @@ async function shownHtml(c: ImapClient, uid: string, msg: ImapMessage, html: str
  *   renumbered), without its text being fetched again.
  * A refused password pauses the mailbox exactly as for receipts; `owner` (the Refresh button) tries it once.
  */
-export async function listInboxICloud(hub: Hub, accountKey: string, since: Date, known: (id: string) => boolean, knownMessage: (messageId: string) => boolean, opts: { owner?: boolean } = {}): Promise<InboxListing> {
+export async function listInboxICloud(hub: Hub, accountKey: string, since: Date, known: (id: string) => boolean, knownMessage: (messageId: string) => boolean, opts: { owner?: boolean; needsRefs?: (id: string) => boolean; sentFrom?: string | null } = {}): Promise<InboxListing> {
   const email = emailOf(accountKey);
   const a = account(hub, email);
   if (a.refused_at && !opts.owner) throw new StoreError(409, REFUSED);
   let present: string[] | null = null;
+  let seen: string[] | null = null;
   const mails: InboxMail[] = [];
   const moved: { id: string; message_id: string }[] = [];
+  const refs: { id: string; refs: string[] }[] = [];
   let more = false;
+  let sentAt: string | undefined;
   try {
     await withClient({ user: a.email, pass: a.password }, DEADLINES.list, async (c) => {
-      const f = inboxFolder(await c.list());
+      const folders = await c.list();
+      const f = inboxFolder(folders);
       if (!f) return;
       const box = await c.mailboxOpen(f.path, { readOnly: true });
       const id = (uid: number) => messageId(box.uidValidity, uid, f.path);
-      present = ((await c.search({ all: true }, { uid: true })) || []).map(id);
+      const all = (await c.search({ all: true }, { uid: true })) || [];
+      present = all.map(id);
+      // Read or unread, as the mailbox has it (read in Apple Mail counts): FETCH FLAGS, which reads and changes nothing.
+      const read = new Set<number>();
+      if (c.fetch) {
+        if (all.length) for await (const m of c.fetch("1:*", { uid: true, flags: true }, { uid: true })) if (m.flags?.has("\\Seen")) read.add(m.uid);
+        seen = all.filter((uid) => read.has(uid)).map(id);
+      }
       const fresh = ((await c.search({ since }, { uid: true })) || []).filter((uid) => !known(id(uid)));
       for (const uid of [...fresh].sort((x, y) => y - x)) {
-        if (mails.length >= INBOX_MAX) { more = true; return; }
+        if (mails.length >= INBOX_MAX) { more = true; break; }
         const msg = await c.fetchOne(String(uid), { envelope: true, bodyStructure: true, internalDate: true, headers: INBOX_HEADERS }, { uid: true });
         if (!msg) continue;
         const mid = bareId(msg.envelope?.messageId);
@@ -557,6 +582,50 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
         try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
         mails.push(inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html)));
       }
+      // Mail kept before threads: the Message-IDs it answers, headers only (at most REFS_MAX a refresh).
+      for (const uid of all.filter((u) => known(id(u)) && opts.needsRefs?.(id(u))).slice(0, REFS_MAX)) {
+        const msg = await c.fetchOne(String(uid), { envelope: true, bodyStructure: true, internalDate: true, headers: ["references"] }, { uid: true });
+        if (msg) refs.push({ id: id(uid), refs: answers(msg) });
+      }
+      // The owner's replies: from the folder iCloud marks Sent, read-only like the Inbox, only those answering mail the
+      // hub keeps or lists now. Each is read by its headers first; the text only of those that belong.
+      // Each sent mail is looked at once, when it is new: `sentFrom` is how far the folder was read last time
+      // (`<UIDVALIDITY>:<UID>`), and only mail after it is looked at, oldest first, SENT_SCAN_MAX a refresh. Looking at
+      // every sent mail of the last 90 days on every refresh cost one request each, every 15 minutes, for good.
+      // While Inbox mail is still waiting for the next refresh, Sent waits too: a reply looked at before the mail
+      // it answers is kept would be passed over.
+      const sent = folders.find((x) => x.specialUse === "\\Sent" && !x.flags.has("\\Noselect"));
+      if (!sent || more) return;
+      const sbox = await c.mailboxOpen(sent.path, { readOnly: true });
+      const sid = (uid: number) => messageId(sbox.uidValidity, uid, sent.path);
+      const validity = String(sbox.uidValidity);
+      const from = opts.sentFrom?.startsWith(`${validity}:`) ? Number(opts.sentFrom.slice(validity.length + 1)) || 0 : 0;
+      const listed = new Set(mails.map((m) => m.message_id).filter((x): x is string => !!x));
+      let mine = 0;
+      let looked = 0;
+      let at = from;
+      for (const uid of ((await c.search({ since }, { uid: true })) || []).filter((u) => u > from && !known(sid(u))).sort((x, y) => x - y)) {
+        if (looked >= SENT_SCAN_MAX || mine >= INBOX_MAX) { more = true; break; }
+        looked++;
+        at = uid;
+        const msg = await c.fetchOne(String(uid), { envelope: true, bodyStructure: true, internalDate: true, headers: ["references"] }, { uid: true });
+        if (!msg) continue;
+        const mid = bareId(msg.envelope?.messageId);
+        const to = answers(msg);
+        if ((mid && knownMessage(mid)) || !to.some((r) => listed.has(r) || knownMessage(r))) continue;
+        const { plain, html } = await downloadText(c, String(uid), msg);
+        let text: string;
+        try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a sent mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
+        const m = inboxMail(sid(uid), msg, text, await shownHtml(c, String(uid), msg, html));
+        m.mine = true;
+        m.automated = false;
+        // The owner's own reply quotes the mail it answers, web pictures and all. Fetching those again would tell
+        // that mail's sender the owner answered (a second fetch, only after a reply): none is fetched for sent mail.
+        m.remote = [];
+        mails.push(m);
+        mine++;
+      }
+      sentAt = `${validity}:${at}`;
     });
   } catch (e) {
     const f = failure(e);
@@ -564,7 +633,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
     throw f;
   }
   if (a.refused_at) saveAccount(hub, email, { last_error: null, refused_at: null });
-  return { present, mails, moved, more };
+  return { present, seen, mails, moved, more, refs, ...(sentAt ? { sentAt } : {}) };
 }
 
 /** Show original: one message's whole text, fetched now and never kept; null when it is gone from the mailbox. */
@@ -639,6 +708,41 @@ export async function moveICloud(hub: Hub, accountKey: string, refs: MoveRef[], 
   return out;
 }
 
+/**
+ * Mark a kept message read or unread in iCloud (opening it on the Mail screen, or Mark unread). The fence around the
+ * Mail screen's second write: only a message in the Inbox or the `\Archive` folder, the folder not reset since (its
+ * UIDVALIDITY), the message still the one the hub kept (its Message-ID read again), and only the `\Seen` flag, added or
+ * removed. False when it was not changed.
+ */
+export async function setSeenICloud(hub: Hub, accountKey: string, refs: MoveRef[], seen: boolean): Promise<boolean[]> {
+  const out = refs.map(() => false);
+  const todo = refs.map((ref, i) => ({ i, ref, at: parseId(ref.id) })).filter((x) => x.at && x.ref.message_id);
+  if (!todo.length) return out;
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  // One sign-in for all of them (opening a thread of 25 unread mails used to make 25), a folder at a time.
+  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    const w = c as unknown as ImapClient & ImapMover;
+    const folders = await c.list();
+    const allowed = [inboxFolder(folders)?.path, folders.find((f) => f.specialUse === "\\Archive")?.path].filter(Boolean);
+    for (const folder of [...new Set(todo.map((x) => x.at!.folder))]) {
+      if (!allowed.includes(folder)) continue;
+      const box = await w.mailboxOpen(folder, { readOnly: false });
+      for (const x of todo.filter((y) => y.at!.folder === folder)) {
+        if (String(box.uidValidity) !== x.at!.validity) continue;
+        const msg = await c.fetchOne(x.at!.uid, { envelope: true, bodyStructure: true, internalDate: true }, { uid: true });
+        if (!msg || bareId(msg.envelope?.messageId) !== x.ref.message_id) continue;
+        out[x.i] = await (seen ? w.messageFlagsAdd(x.at!.uid, ["\\Seen"], { uid: true }) : w.messageFlagsRemove(x.at!.uid, ["\\Seen"], { uid: true }));
+      }
+    }
+    return out;
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+}
+
 /** Opens the message in Apple Mail (Mac, iPhone, iPad) by its Message-ID; iCloud Mail on the web when it has none. */
 export function icloudLink(ref: MailRef): string {
   const mid = ref.message_id?.trim().replace(/^<|>$/g, "");
@@ -655,10 +759,11 @@ export const icloudSource: MailSource = {
   isOwnLink: (url) => url.startsWith("message://") || url === WEB_LINK,
 };
 
-/** The Mail screen's iCloud source (imports/inbox-source.ts): its Inbox listing and its one move, Inbox to Archive and back. */
+/** The Mail screen's iCloud source (imports/inbox-source.ts): its Inbox listing, its move (Inbox to Archive and back) and read or unread. */
 export const icloudInbox: InboxSource = {
   prefix: PREFIX,
   accounts: (hub) => icloudSource.accounts(hub),
   list: (hub, account, since, known, knownMessage, opts) => listInboxICloud(hub, account, since, known, knownMessage, opts),
   move: (hub, account, refs, to) => moveICloud(hub, account, refs, to),
+  setSeen: (hub, account, refs, seen) => setSeenICloud(hub, account, refs, seen),
 };

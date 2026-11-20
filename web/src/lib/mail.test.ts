@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, bundleOf, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -86,6 +86,108 @@ describe("mail screen rules", () => {
     const sat = snoozeChoices(new Date(2026, 10, 21, 10, 0));
     expect(sat.find((c) => c.id === "weekend")).toMatchObject({ label: "Next weekend", at: new Date(2026, 10, 28, 9) });
     expect(sat.find((c) => c.id === "nextweek")!.at).toEqual(new Date(2026, 10, 23, 8));
+  });
+
+  it("adds the owner's own bundles after the built-in ones, in their own colors", () => {
+    const school = { id: "c-0123456789", name: "School", color: 2, addresses: [], domains: ["school.example"], words: [] };
+    const shown = shownBundles(allOn, [school]);
+    expect(shown.map((b) => b.id)).toEqual([...BUNDLES.map((b) => b.id), "c-0123456789"]);
+    expect(bundleClass(shown[shown.length - 1])).toBe("b-custom cc2");
+    expect(bundleClass(BUNDLES[0])).toBe("b-purchases");
+    expect(bundleOf({ bundle: "c-0123456789" }, shown)?.name).toBe("School");
+  });
+
+  it("maps the Mail screen's keys: arrows to move, letters to act, nothing while typing but Escape", () => {
+    const k = (key: string, more: Partial<{ shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }> = {}, typing = false) =>
+      mailKeyAction({ key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, ...more }, typing);
+    expect([k("ArrowDown"), k("ArrowUp"), k("ArrowDown", { shiftKey: true }), k("Enter"), k(" "), k("Escape")]).toEqual(["down", "up", "extend-down", "open", "select", "escape"]);
+    expect([k("d"), k("D", { shiftKey: true }), k("s"), k("p"), k("u"), k("r"), k("/"), k("?")]).toEqual(["done", "done", "snooze", "pin", "unread", "read", "search", "help"]);
+    expect(k("d", {}, true)).toBeNull();
+    expect(k("Escape", {}, true)).toBe("escape");
+    expect(k("p", { ctrlKey: true })).toBeNull();
+    expect(k("r", { metaKey: true })).toBeNull();
+    expect(k("t")).toBeNull();
+  });
+
+  it("shows the reminders that are due among the mail, never a mail's own snooze task", () => {
+    const now = new Date(2026, 10, 20, 12);
+    const iso = (h: number, d = 20) => new Date(2026, 10, d, h).toISOString();
+    const t = (id: string, fields: Record<string, unknown>) => ({ id, fields: { title: id, status: "scheduled", ...fields } });
+    const due = dueReminders([
+      t("dentist", { remind_at: iso(9) }),
+      t("overdue", { remind_at: iso(9, 18), friction: "reason" }),
+      t("later", { remind_at: iso(15) }),
+      t("snoozed", { remind_at: iso(8), snoozed_until: iso(14) }),
+      t("woke", { remind_at: iso(7), snoozed_until: iso(11) }),
+      t("finished", { remind_at: iso(9), status: "done" }),
+      t("mailsnooze", { remind_at: iso(9), mail: "abc" }),
+      t("notime", {}),
+    ], now);
+    expect(due.map((r) => r.id)).toEqual(["overdue", "dentist", "woke"]);
+    expect(due[0].friction).toBe("reason");
+    expect(due[2].at).toBe(iso(11));
+  });
+
+  it("folds the same quoted history the hub's page folds", () => {
+    const hub = fs.readFileSync(path.join(__dirname, "../../../hub/src/mail-html.ts"), "utf8");
+    expect(hub).toContain(`export const QUOTE_SELECTOR = '${QUOTE_SELECTOR}';`);
+  });
+
+  it("shows a thread as one row: its people, newest time, state, unread and the ids each action takes", () => {
+    const g1 = mail({ thread: "t1", at: at(3), subject: "Gutters", seen: true, preview: "Saturday?" });
+    const me = mail({ thread: "t1", at: at(2), subject: "Re: Gutters", mine: true, state: "sent", from: { name: "Robin", address: "robin@icloud.example" }, preview: "Yes, 10 AM." });
+    const g2 = mail({ thread: "t1", at: at(1), subject: "Re: Gutters", seen: false, preview: "Bring the ladder." });
+    const shop = mail({ thread: "t2", at: at(0, 8), automated: true, bundle: "purchases", from: { name: "Northwind", address: "o@northwind.example" } });
+    const lonely = mail({ thread: "t3", mine: true, state: "sent" });
+    const rows = threadRows([g1, me, g2, shop, lonely]);
+    expect(rows).toHaveLength(2);
+    const t = rows.find((r) => r.thread === "t1")!;
+    expect([t.id, t.subject, t.people, t.state, t.seen, t.at]).toEqual([g2.id, "Gutters", "Alex, me (3)", "inbox", false, g2.at]);
+    expect(t.members.map((m) => m.id)).toEqual([g1.id, me.id, g2.id]);
+    expect(t.ids).toEqual({ open: [g1.id, g2.id], done: [], unread: [g2.id] });
+    expect(t.bundle).toBeNull();
+    expect(rows.find((r) => r.thread === "t2")!.people).toBe("Northwind");
+    // Done with one message, the other still in the Inbox: the thread stays in the Inbox.
+    expect(threadRows([{ ...g1, state: "done" }, g2])[0].state).toBe("inbox");
+    expect(threadRows([{ ...g1, state: "done" }, { ...g2, state: "done" }])[0].ids.done).toEqual([g1.id, g2.id]);
+    expect(threadRows([me, { ...g2, preview: "x" }, { ...me, id: "m-late", at: at(0, 9), preview: "See you" }])[0].preview).toBe("You: See you");
+  });
+
+  it("uses the owner's own snooze times", () => {
+    const thu = new Date(2026, 10, 19, 15, 0); // a Thursday, 3 PM
+    const mine = snoozeChoices(thu, { later_hours: 2, tomorrow: "07:30", weekend_day: 0, weekend_time: "10:15", week_day: 2, week_time: "09:00" });
+    expect(mine.map((c) => c.at.getTime())).toEqual([
+      new Date(2026, 10, 19, 17).getTime(),
+      new Date(2026, 10, 20, 7, 30).getTime(),
+      new Date(2026, 10, 22, 10, 15).getTime(), // Sunday
+      new Date(2026, 10, 24, 9).getTime(), // Tuesday
+    ]);
+  });
+
+  it("holds a bundle's mail until its time, or keeps it out of the Inbox; pinned mail always shows", () => {
+    const iso = (d: Date) => d.toISOString();
+    // Arrived Thursday 10:30 AM.
+    const arrived = iso(new Date(2026, 10, 19, 10, 30));
+    expect(deliveryAt(arrived, { mode: "daily", time: "07:00" })).toEqual(new Date(2026, 10, 20, 7));
+    expect(deliveryAt(arrived, { mode: "daily", time: "18:00" })).toEqual(new Date(2026, 10, 19, 18));
+    expect(deliveryAt(arrived, { mode: "weekly", day: 0, time: "18:00" })).toEqual(new Date(2026, 10, 22, 18));
+    expect(deliveryAt(arrived, { mode: "weekly", day: 4, time: "09:00" })).toEqual(new Date(2026, 10, 26, 9)); // Thursday 9 AM had passed: next week's
+    expect(deliveryAt(arrived, { mode: "never" })).toBeNull();
+    expect(deliveryAt(arrived, undefined)).toEqual(new Date(arrived));
+
+    const delivery = { promos: { mode: "daily" as const, time: "07:00" }, social: { mode: "never" as const } };
+    const promo = mail({ at: arrived, bundle: "promos", automated: true });
+    const pinned = mail({ at: arrived, bundle: "promos", automated: true, pinned: true });
+    const social = mail({ at: arrived, bundle: "social", automated: true });
+    const person = mail({ at: arrived });
+    const thuNoon = new Date(2026, 10, 19, 12);
+    expect(inboxAt(promo, delivery, thuNoon)).toBeNull();
+    expect(inboxAt(promo, delivery, new Date(2026, 10, 20, 8))).toBe(iso(new Date(2026, 10, 20, 7))); // listed by when it showed
+    expect(inboxAt(pinned, delivery, thuNoon)).toBe(arrived);
+    expect(inboxAt(social, delivery, new Date(2027, 0, 1))).toBeNull();
+    expect(inboxAt(person, delivery, thuNoon)).toBe(arrived);
+    const rows = inboxSections([promo, pinned, social, person], shownBundles(allOn), { now: thuNoon, delivery }).flatMap((s) => s.rows);
+    expect(rows.map((r) => (r.kind === "mail" ? r.mail.id : r.bundle.id))).toEqual([pinned.id, person.id]);
   });
 
   it("lists a mail back from a snooze by when it came back, at the top", () => {
@@ -193,5 +295,16 @@ describe("mail screen rules", () => {
     expect(frameLink("javascript:alert(1)")).toBeNull();
     expect(frameLink("file:///c:/x")).toBeNull();
     expect(frameLink(null)).toBeNull();
+  });
+});
+
+describe("mail batches", () => {
+  it("a selection of any size goes to the hub 500 at a time", async () => {
+    const { batches, BATCH_MAX } = await import("./mail");
+    const ids = Array.from({ length: 1201 }, (_, i) => String(i));
+    const parts = batches(ids);
+    expect(parts.map((p) => p.length)).toEqual([BATCH_MAX, BATCH_MAX, 201]);
+    expect(parts.flat()).toEqual(ids);
+    expect(batches([])).toEqual([]);
   });
 });

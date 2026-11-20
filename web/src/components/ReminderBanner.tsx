@@ -7,10 +7,15 @@ import { notify } from "../tauri/bridge";
 import { go } from "../lib/router";
 import { fmtDateTime } from "../lib/time";
 import { useEscape } from "../lib/keys";
+import { useAlerts } from "../lib/alerts";
 
 /** Tasks whose reminder time has passed, every 30 s from the local copy: a banner, and a Windows notification under Tauri. */
 export function ReminderBanner() {
   const reminders = useEntities("task", hasReminder);
+  // Reminders switched off in Settings, Notifications: no banner and no notification here either (this banner is
+  // made from the local copy, so the hub holding the alert back does not reach it).
+  const alerts = useAlerts();
+  const wanted = alerts.on("reminder");
   const [due, setDue] = useState<DueReminder[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const notified = useRef(new Set<string>());
@@ -18,7 +23,7 @@ export function ReminderBanner() {
 
   useEffect(() => {
     const tick = () => {
-      const d = dueReminders(reminders);
+      const d = wanted ? dueReminders(reminders) : [];
       setDue(d);
       for (const r of d) {
         if (!notified.current.has(r.key)) {
@@ -30,7 +35,7 @@ export function ReminderBanner() {
     tick();
     const id = setInterval(tick, 30_000);
     return () => clearInterval(id);
-  }, [reminders]);
+  }, [reminders, wanted]);
 
   const visible = due.filter((d) => !dismissed.has(d.key));
   const firstKey = visible[0]?.key;

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanCss, cleanMailHtml, MAIL_CSP, mailDocument, mailHref, PICTURE_CHARS_MAX, pictureData, pictureType, withImages } from "../src/mail-html.js";
+import { cleanCss, cleanMailHtml, MAIL_CSP, mailDocument, mailHref, PICTURE_CHARS_MAX, pictureData, pictureType, QUOTE_SELECTOR, withImages } from "../src/mail-html.js";
 import { cidParts } from "../src/imports/icloud.js";
+import { ownWords, quoteStart } from "../src/imports/mail-text.js";
 import { previewOf } from "../src/mail-inbox.js";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
@@ -187,6 +188,36 @@ test("mail html: only pictures the HTML shows are fetched from the message, neve
     { part: "5", type: "image/jpeg", id: "<huge@x>", size: 50_000_000 },
   ] };
   assert.deepEqual(cidParts(tree, `<img src="cid:logo@x"><img src="cid:doc@x"><img src="cid:huge@x">`), [{ part: "2", cid: "logo@x" }]);
+});
+
+test("mail html: the list's first line is the message's own words, never the quoted history under them", () => {
+  const reply = "Great, I'll call you Monday at 3pm ET. Looking forward to it. --Sam\n\nOn Fri, Nov 13, 2026 at 2:03 PM Robin Lee <robin@example.com> wrote:\n\nHi Sam,\n\nI'd be glad to talk.";
+  assert.equal(previewOf(reply), "Great, I'll call you Monday at 3pm ET. Looking forward to it. --Sam");
+  assert.equal(ownWords("Sounds good.\nOn Fri, Nov 13, 2026 at 2:03 PM Robin Lee\n<robin@example.com> wrote:\n> Hi"), "Sounds good.", "the intro split over two lines");
+  assert.equal(ownWords("Yes.\n\n> Can you come?\n> Robin"), "Yes.");
+  assert.equal(ownWords("Approved.\n\n-----Original Message-----\nFrom: Robin"), "Approved.");
+  assert.equal(ownWords("See below.\n\nFrom: Robin Lee <robin@example.com>\nSent: Friday, November 13, 2026 2:03 PM\nTo: Sam"), "See below.");
+  assert.equal(ownWords("Merci !\n\nLe ven. 13 nov. 2026 à 14:03, Robin <robin@example.com> a écrit :\n> Bonjour"), "Merci !");
+  assert.equal(ownWords("Danke!\n\nAm Fr., 13. Nov. 2026 um 14:03 Uhr schrieb Robin <robin@example.com>:\n> Hallo"), "Danke!");
+  // Not quotes: a sentence that starts with "On" or mentions writing, and a mail that is all quote.
+  assert.equal(ownWords("On Monday we fly out.\nI wrote: the list is attached."), "On Monday we fly out.\nI wrote: the list is attached.");
+  assert.equal(ownWords("> only a quote"), "> only a quote");
+  const t = "Yes.\n\nOn Fri, Nov 13, 2026 at 2:03 PM Robin <robin@example.com> wrote:\n> Can you?";
+  assert.equal(t.slice(quoteStart(t)), "On Fri, Nov 13, 2026 at 2:03 PM Robin <robin@example.com> wrote:\n> Can you?");
+  assert.equal(quoteStart("No quote here."), -1);
+  assert.equal(quoteStart("> only a quote"), -1);
+});
+
+test("mail html: the page folds a reply's quoted history, as mail apps mark it, until the screen unfolds it", () => {
+  const { html } = cleanMailHtml('<div>Sounds good.</div><div class="gmail_quote"><div>On Fri, Robin wrote:</div><blockquote>Can you?</blockquote></div><blockquote type="cite">Apple quote</blockquote><div id="divRplyFwdMsg">From: Robin</div><div>Outlook quote</div>');
+  assert.match(html, /class="gmail_quote"/);
+  assert.match(html, /<blockquote type="cite">/);
+  assert.match(html, /id="divRplyFwdMsg"/);
+  const page = mailDocument(html);
+  assert.match(page, /<body class="aeneas-fold">/);
+  assert.match(page, /body\.aeneas-fold \.gmail_quote,body\.aeneas-fold blockquote\[type="cite"\],/);
+  assert.match(page, /body\.aeneas-fold #divRplyFwdMsg ~ \*\{display:none!important\}/);
+  assert.equal(QUOTE_SELECTOR.split(", ").length, 6);
 });
 
 test("mail html: the list's first line shows link words, never addresses", () => {

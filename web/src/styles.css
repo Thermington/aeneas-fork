@@ -1000,7 +1000,21 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 /* Mail: conversations beside the open one, each message a bubble (theirs left, yours right, as in Assistant). */
 /* Mail (Mail.tsx): an inner side list, a bar colored by where you are, and the Inbox as one column of day groups. */
 .mailx { display: grid; grid-template-rows: auto minmax(0, 1fr); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); height: calc(100dvh - 40px); min-height: 420px; overflow: hidden; }
-.mailx-bar { --barc: var(--b-inbox); background: var(--barc); color: #fff; display: flex; align-items: center; gap: 12px; padding: 10px 14px; transition: background .25s; }
+/* The top bar: the title on the left, Refresh and search in the middle (the same place in every view), Pinned only on the right. */
+.mailx-bar { --barc: var(--b-inbox); background: var(--barc); color: #fff; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 560px) minmax(0, 1fr); align-items: center; gap: 12px; padding: 10px 14px; transition: background .25s; }
+.mailx-bar.selecting { grid-template-columns: minmax(0, 1fr); }
+.mailx-bar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mailx-bar-mid { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mailx-bar-right { display: flex; justify-content: flex-end; min-width: 0; }
+.mailx-refresh { display: grid; place-items: center; width: 32px; height: 32px; min-height: 0; padding: 0; border-radius: 50%; flex: none; }
+/* The same height as the search box and the Pinned only switch. */
+.mailx-refresh .mailx-icon { width: 22px; height: 22px; }
+/* On the colored bar a button's own shade is the bar's color darkened, never lightened: white words and icons must read on it (as the search box). */
+.mailx-refresh:hover { background: rgb(0 0 0 / .2); }
+.mailx-refresh.busy .mailx-icon { animation: mailx-spin 1s linear infinite; }
+@keyframes mailx-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mailx-refresh.busy .mailx-icon { animation: none; opacity: .6; } }
+.mailx-refreshmsg { margin-bottom: 10px; }
 .mailx-bar.v-snoozed { --barc: var(--b-snoozed); }
 .mailx-bar.v-done { --barc: var(--b-done); }
 .mailx-bar.b-purchases { --barc: var(--b-purchases); } .mailx-bar.b-trips { --barc: var(--b-trips); } .mailx-bar.b-social { --barc: var(--b-social); } .mailx-bar.b-promos { --barc: var(--b-promos); }
@@ -1012,15 +1026,20 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
  * The search box is the bar's color, darker (never lighter: white words must read on it whatever the bar's color is).
  * It is a dark field in the light look too, so the browser draws its own parts (the clear button) light.
  */
-.mailx-search { flex: 1; max-width: 480px; min-width: 0; background: rgb(0 0 0 / .2); border: 0; color: #fff; min-height: 32px; color-scheme: dark; }
+.mailx-search { flex: 1; min-width: 0; background: rgb(0 0 0 / .2); border: 0; color: #fff; min-height: 32px; color-scheme: dark; }
 .mailx-search::placeholder { color: rgb(255 255 255 / .8); }
 .mailx-search:focus { outline: 2px solid #fff; outline-offset: 1px; }
-.mailx-switch { display: flex; align-items: center; gap: 8px; margin-left: auto; white-space: nowrap; }
-.mailx-switch .sw { width: 34px; height: 18px; border-radius: 9px; background: rgb(255 255 255 / .35); position: relative; }
-.mailx-switch .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.mailx-switch { display: flex; align-items: center; gap: 8px; white-space: nowrap; flex: none; }
+.mailx-switch.placeholder { visibility: hidden; pointer-events: none; }
+.mailx-bar { grid-template-columns: minmax(0, 1fr) minmax(0, 680px) minmax(0, 1fr); }
+/* Pinned only: the switch's circle carries the pin, gray while off, in the bar's color while on. */
+.mailx-switch .sw { width: 58px; height: 32px; border-radius: 16px; background: rgb(255 255 255 / .35); position: relative; }
+.mailx-switch .knob { position: absolute; top: 2px; left: 2px; width: 28px; height: 28px; border-radius: 50%; background: #fff; color: #6b7280; display: grid; place-items: center; transition: transform .2s; }
+.mailx-switch .knob .mailx-icon { width: 18px; height: 18px; stroke-width: 2; }
 .mailx-switch[aria-pressed="true"] .sw { background: rgb(255 255 255 / .8); }
-.mailx-switch[aria-pressed="true"] .sw::after { transform: translateX(16px); background: var(--barc); }
-.mailx-body { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; position: relative; }
+.mailx-switch[aria-pressed="true"] .knob { transform: translateX(26px); color: var(--barc); }
+.mailx-switch[aria-pressed="true"] .knob .mailx-icon { fill: currentColor; }
+.mailx-body { --mailx-rail: 210px; display: grid; grid-template-columns: var(--mailx-rail) minmax(0, 1fr); min-height: 0; position: relative; }
 .mailx-rail { border-right: 1px solid var(--border); padding: 10px 6px; display: flex; flex-direction: column; gap: 1px; background: var(--surface); min-height: 0; overflow-y: auto; }
 .mailx-nav { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; border: 0; border-radius: var(--radius); padding: 6px 10px; min-height: 34px; }
 .mailx-nav:hover { background: var(--surface-2); }
@@ -1031,12 +1050,17 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 12px 10px 4px; }
 .mailx-boxes { margin-top: auto; padding: 14px 8px 4px; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
 .mailx-main { min-width: 0; padding: 16px; overflow-y: auto; background: var(--mail-page); }
+/* On a wide window the list keeps as much room on its right as the side list takes on its left. */
+@media (min-width: 1200px) { .mailx-main { padding-right: calc(var(--mailx-rail) + 16px); } }
 .mailx-col { display: flex; flex-direction: column; gap: 18px; }
 .mailx-group h2 { font-size: 13px; color: var(--muted); margin: 0 0 6px 4px; }
 /* Each mail and each bundle in a day is a box of its own, a little apart, so nothing looks nested that is not. */
 .mailx-list { display: flex; flex-direction: column; gap: 6px; }
 .mailx-list > .mailx-item, .mailx-list > .mailx-bundle { background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.mailx-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; text-align: left; background: transparent; border: 0; border-top: 1px solid var(--border); border-radius: 0; padding: 9px 12px; min-height: 0; }
+/* A row: the unread dot's column at the left edge (empty when read, so circles line up), the circle, the words, the time. */
+.mailx-row { display: grid; grid-template-columns: 8px 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; text-align: left; background: transparent; border: 0; border-top: 1px solid var(--border); border-radius: 0; padding: 9px 12px 9px 6px; min-height: 0; }
+/* The dot's column: the dot centered between the row's edge and the circle, 9px each side (its negative margin widens the dot's own box, not the grid's gap). */
+.mailx-dotcol { display: flex; justify-content: center; margin-right: -6px; }
 .mailx-list > .mailx-item > .mailx-row, .mailx-list > .mailx-bundle > .mailx-row:first-child { border-top: 0; }
 /* An open mail on its own: a raised box in the list's place. */
 .mailx-list > .mailx-card { margin: 0; }
@@ -1045,9 +1069,13 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-av { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); font-weight: 600; background: var(--surface-2); border: 1px solid var(--border); flex: none; }
 .mailx-what { display: flex; flex-direction: column; min-width: 0; }
 .mailx-what .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.mailx-what .who b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailx-what .who b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A bundle's count: a number to read, not a button, so it keeps its own height on touch screens too (.chip grows to 44px there). */
 .mailx-what .who .chip { min-height: 0; padding: 1px 7px; line-height: 16px; flex: none; }
+/* Unread: the sender and subject in bold, a dot in the accent color before them. */
+.mailx-row.unread .who b, .mailx-row.unread .line .subj { font-weight: 700; }
+.mailx-row.unread .line { color: var(--text); }
+.mailx-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
 .mailx-what .line { color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mailx-what .line .subj { color: var(--text); }
 .mailx-row .when { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -1065,11 +1093,109 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-act .mailx-icon { width: 18px; height: 18px; }
 .mailx-card-acts { display: flex; gap: 4px; padding-top: 0; padding-bottom: 6px; }
 .mailx-acterr { margin-bottom: 12px; }
+/* Reminders among the mail: a bell in the circle; the row is a link to the task. */
+a.mailx-row { color: inherit; text-decoration: none; }
+.mailx-av.reminder { background: var(--b-snoozed); color: #fff; border-color: transparent; }
+.mailx-item.reminder .line { color: var(--b-snoozed); }
+.mailx-remsnooze { padding: 4px 12px 12px 74px; }
+.mailx-newrem { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border-radius: 16px; background: rgb(0 0 0 / .2) !important; }
+.mailx-newrem:hover { background: rgb(0 0 0 / .32) !important; }
+.mailx-newreminder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; margin-bottom: 12px; background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); }
+.mailx-newreminder input:first-of-type { flex: 1; min-width: 180px; }
+.mailx-newreminder button.link { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; }
+.mailx-notify { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 0; color: var(--muted); }
+/* The side list's bottom: Refresh, Keyboard keys, and "i", which opens the mailboxes and settings. */
+.mailx-boxes .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mailx-infobtn { position: relative; width: 28px; padding: 0; font-weight: 700; font-style: italic; font-family: Georgia, serif; }
+.mailx-infobtn[aria-expanded="true"] { color: var(--link); }
+.mailx-alertdot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--danger, #b4443c); }
+.mailx-info { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--mail-item); }
+@media (hover: none) { .mailx-keysbtn { display: none; } }
+.mailx-notify label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mailx-delivery input[type="checkbox"] { margin: 0; }
+/* Keyboard: the highlighted row has a bar in the accent color on its left. */
+.mailx-item.cursor, .mailx-bundle.cursor > .mailx-row:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.mailx-card[data-nav] { scroll-margin: 8px; }
+/* Selecting: a row's circle becomes a checkbox when pointed at, and on every row while anything is selected. */
+/* Exactly over the circle: the same 34px, at the circle's place (6px row padding, the 8px dot column, the row's 12px gap). */
+.mailx-pick { position: absolute; left: 26px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; box-sizing: border-box; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid var(--border); background: var(--mail-item); color: #fff; display: none; place-items: center; z-index: 1; cursor: pointer; }
+.mailx-item:hover .mailx-pick, .mailx.selecting .mailx-pick, .mailx-item.picked .mailx-pick { display: grid; }
+/* Not picked: a dim checkmark in a darker ring, so it reads as a checkbox; brighter when pointed at; picked: full color. */
+.mailx-pick { color: var(--muted); border-color: var(--muted); }
+.mailx-pick .mailx-icon { opacity: .4; stroke-width: 2.4; }
+.mailx-pick:hover { border-color: var(--accent); }
+.mailx-pick:hover .mailx-icon { opacity: .85; color: var(--link); }
+.mailx-item.picked .mailx-pick { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.mailx-item.picked .mailx-pick .mailx-icon { opacity: 1; color: #fff; }
+/* An open mail: the checkbox over its header's circle (14px in, 14px down), shown when its header is pointed at. */
+.mailx-card { position: relative; }
+.mailx-card > .mailx-pick { left: 14px; top: 14px; transform: none; }
+.mailx-card:has(> .mailx-card-head:hover) > .mailx-pick, .mailx-card > .mailx-pick:hover, .mailx.selecting .mailx-card > .mailx-pick, .mailx-card.picked > .mailx-pick { display: grid; }
+.mailx-card.picked > .mailx-pick { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.mailx-card.picked > .mailx-pick .mailx-icon { opacity: 1; color: #fff; }
+.mailx-item.picked { background: color-mix(in srgb, var(--accent) 8%, var(--mail-item)); }
+@media (hover: none) { .mailx-item:hover .mailx-pick { display: none; } .mailx.selecting .mailx-pick, .mailx-item.picked .mailx-pick { display: grid; } }
+.mailx-selbar { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.mailx-selbar h1 { margin-right: 10px; }
+.mailx-selbar button { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius); }
+.mailx-selbar button:hover { background: rgb(0 0 0 / .2); }
+.mailx-selclear { margin-left: auto; }
+.mailx-multisnooze { padding: 12px; margin-bottom: 12px; background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); align-items: center; }
+.mailx-multisnooze > b { flex-basis: 100%; }
+.mailx-help { background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 12px; }
+.mailx-help dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0; font-size: 13px; }
+.mailx-help dt { font-family: ui-monospace, monospace; color: var(--link); }
+.mailx-help dd { margin: 0; }
+.mailx-help button.link, .mailx-keyshint { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; font-size: 12px; }
+.mailx-keyshint { margin: 6px 10px; text-align: left; }
+@media (hover: none) { .mailx-keyshint { display: none; } }
+/* The owner's own bundles: eight colors of their own, apart from the built-in bundles' (white text on each). */
+.b-custom.cc0 { --c: #0f7c86; --barc: #0f7c86; } .b-custom.cc1 { --c: #2f6fd0; --barc: #2f6fd0; }
+.b-custom.cc2 { --c: #a83e8e; --barc: #a83e8e; } .b-custom.cc3 { --c: #8a5a2b; --barc: #8a5a2b; }
+.b-custom.cc4 { --c: #5560a8; --barc: #5560a8; } .b-custom.cc5 { --c: #c2416b; --barc: #c2416b; }
+.b-custom.cc6 { --c: #127a9c; --barc: #127a9c; } .b-custom.cc7 { --c: #8a7410; --barc: #8a7410; }
+.mailx-nav.b-custom .ico { color: var(--c); }
+.mailx-newbundle { color: var(--muted); }
+.mailx-editbundle { align-self: flex-start; }
+.mailx-bundleform { display: flex; flex-direction: column; gap: 12px; max-width: 560px; background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.mailx-bundleform h2 { margin: 0; font-size: 18px; }
+.mailx-bundleform label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.mailx-bundleform textarea, .mailx-bundleform input { font: inherit; color: var(--text); }
+.mailx-bundleform .row { display: flex; gap: 14px; align-items: center; }
+.mailx-bundleform button.link { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; }
+.mailx-bundleform button.link.danger { color: var(--danger, #b4443c); margin-left: auto; }
+.mailx-swatches { display: flex; gap: 8px; }
+.mailx-swatch { width: 28px; height: 28px; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid transparent; background: var(--c); cursor: pointer; }
+.mailx-swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--mail-item) inset; }
+/* A bundle's view: when its mail shows in the Inbox. */
+.mailx-delivery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 4px; font-size: 13px; }
+.mailx-delivery label { display: flex; align-items: center; gap: 6px; }
+.mailx-delivery .muted { flex-basis: 100%; font-size: 12px; }
+/* "•••": the quoted history under a reply, folded until pressed. */
+.mailx-fold { background: var(--mail-page); border: 1px solid var(--border); border-radius: 999px; padding: 0 10px; min-height: 0; height: 20px; line-height: 18px; font-size: 12px; letter-spacing: .1em; color: var(--muted); cursor: pointer; }
+.mailx-fold:hover { background: var(--mail-hover); color: var(--text); }
+.mailx-fold[aria-expanded="true"] { color: var(--link); }
+/* A thread's messages in an open card: each a line that opens to the message. */
+.mailx-msg { border-top: 1px solid var(--border); }
+.mailx-msg-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 0; padding: 10px 14px 8px 60px; min-height: 0; cursor: pointer; font: inherit; color: inherit; }
+.mailx-msg-head:hover { background: var(--mail-hover); }
+.mailx-msg-head .who { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailx-msg-head .who b { color: var(--text); font-weight: 600; }
+.mailx-msg-head .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.mailx-msg-head .line { grid-column: 1 / -1; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailx-msg.mine .mailx-msg-head .who b { color: var(--link); }
+@media (max-width: 767px) { .mailx-msg-head { padding-left: 14px; } }
 /* Snooze choices on an open mail. */
 .mailx-snooze { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; padding-bottom: 12px; }
 .mailx-snooze-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 130px; padding: 8px 12px; background: var(--mail-page); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; font: inherit; text-align: left; }
 .mailx-snooze-choice:hover { background: var(--mail-hover); }
 .mailx-snooze-choice span { color: var(--muted); font-size: 12px; }
+.mailx-snooze-edit { flex-basis: 100%; text-align: left; background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; font-size: 13px; }
+.mailx-snooze-times { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; font-size: 13px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--mail-page); }
+.mailx-snooze-times label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mailx-snooze-times input[type="number"] { width: 4em; }
+.mailx-snooze-times .row { display: flex; gap: 12px; align-items: center; }
+.mailx-snooze-times button.link { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; }
 .mailx-snooze-own { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .mailx-group h2 { display: flex; align-items: center; justify-content: space-between; min-height: 30px; }
 .mailx-sweep { font-size: 12px; padding: 4px 8px; }
@@ -1101,10 +1227,10 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
  */
 .mailx-list > .mailx-bundle.open { border-color: var(--c); border-left-width: 4px; }
 .mailx-bundle.open > .mailx-item > .mailx-row { border-top: 0; }
-.mailx-bundle.open > .mailx-item::before { content: ""; position: absolute; top: 0; left: 60px; right: 0; border-top: 1px solid var(--border); }
+.mailx-bundle.open > .mailx-item::before { content: ""; position: absolute; top: 0; left: 74px; right: 0; border-top: 1px solid var(--border); }
 .mailx-bundle.open > .mailx-module { border-top: 1px solid var(--border); }
 .mailx-bundle.open > .mailx-card { margin: 6px 8px 8px; }
-.mailx-module { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; padding: 6px 12px 6px 60px; font-size: 12px; color: var(--muted); }
+.mailx-module { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; padding: 6px 12px 6px 74px; font-size: 12px; color: var(--muted); }
 .mailx-col > .mailx-module { padding-left: 4px; }
 .mailx-module a { color: var(--ct); font-weight: 600; font-size: 13px; }
 /* An open message: a raised card in the list. */
@@ -1131,6 +1257,7 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 @media (max-width: 767px) {
   .mailx { height: calc(100dvh - 120px); min-height: 360px; border-radius: 0; border-left: 0; border-right: 0; }
   .mailx-menu { display: flex; }
+  .mailx-bar { grid-template-columns: auto minmax(0, 1fr) auto; }
   .mailx-switch .lbl { display: none; }
   .mailx-body { grid-template-columns: minmax(0, 1fr); }
   .mailx-rail { position: absolute; z-index: 5; top: 0; bottom: 0; left: 0; width: min(270px, 85%); transform: translateX(-105%); transition: transform .2s; box-shadow: 0 0 30px rgb(0 0 0 / .25); overflow-y: auto; }
@@ -1143,7 +1270,7 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
   .mailx-module { padding-left: 12px; }
 }
 @media (max-width: 480px) { .mailx-search { display: none; } }
-@media (prefers-reduced-motion: reduce) { .mailx-bar, .mailx-rail, .mailx-switch .sw::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .mailx-bar, .mailx-rail, .mailx-switch .knob { transition: none; } }
 
 /* Wiki: sources and pages beside the page being read. */
 .wiki-side h1 { margin-bottom: 10px; }

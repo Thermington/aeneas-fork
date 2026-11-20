@@ -17,7 +17,7 @@ const list = async (t: TestHub) => ((await (await t.api("/mail")).json()) as { m
 const byKey = async (t: TestHub, subject: string) => (await list(t)).find((m) => m.subject === subject)!;
 const post = async (t: TestHub, path: string, ids: string[]) => (await (await t.api(path, { method: "POST", json: { ids } })).json()) as { moved: string[]; failed: number; error?: string };
 /** Every call the hub may make to iCloud; a delete, flag, copy, append or expunge would show here as something else. */
-const ALLOWED = new Set(["connect", "logout", "close", "list", "mailboxOpen", "search", "fetchOne", "download", "messageMove"]);
+const ALLOWED = new Set(["connect", "logout", "close", "list", "mailboxOpen", "search", "fetch", "fetchOne", "download", "messageMove"]);
 
 test("mail done: Done moves the mail to Archive, it shows under Done, a refresh leaves it there, and Undo brings it back", async () => {
   const t = makeHub();

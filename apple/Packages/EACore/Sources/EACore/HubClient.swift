@@ -294,7 +294,7 @@ public final class HubClient: Sendable {
             }
             return .unknown(name: msg.event, data: msg.data)
         case "modules":
-            if let m = try? JSONCoding.decode(ModulesResponse.self, from: d) { return .modules(m.modules) }
+            if let m = try? JSONCoding.decode(ModulesResponse.self, from: d) { return .modules(m.modules, alerts: m.alerts) }
             return .unknown(name: msg.event, data: msg.data)
         case "ping": return .ping
         default: return .unknown(name: msg.event, data: msg.data)

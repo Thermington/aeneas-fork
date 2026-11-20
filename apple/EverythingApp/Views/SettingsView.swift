@@ -56,7 +56,7 @@ struct SettingsView: View {
                     SettingsRow(title: "Privacy on this device", symbol: "hand.raised", summary: PrivacySettingsView.summary)
                 }
                 NavigationLink { NotificationSettingsView(status: $notifStatus) } label: {
-                    SettingsRow(title: "Notifications", symbol: "bell.badge", summary: notifStatus)
+                    SettingsRow(title: "Notifications", symbol: "bell.badge", summary: notificationsSummary)
                 }
                 if model.isOn(.contacts) {
                     NavigationLink { PeopleSettingsView() } label: {
@@ -146,6 +146,13 @@ struct SettingsView: View {
         if list.isEmpty { return "Everything on" }
         let on = list.filter(\.on).count
         return on == list.count ? "All \(on) on" : "\(on) of \(list.count) on"
+    }
+
+    /// The permission on this device, then how many kinds of alert are switched off, when any is.
+    private var notificationsSummary: String {
+        let alerts = engine.alerts.shown(with: model.modules)
+        let off = alerts.filter { !$0.on }.count
+        return off == 0 ? notifStatus : "\(notifStatus), \(off) of \(alerts.count) kinds off"
     }
 
     private var plannerSummary: String {
@@ -383,12 +390,34 @@ struct ConnectionSettingsView: View {
 
 // MARK: Notifications
 
+/// Settings, Notifications: whether this device may show notifications at all, and each kind of alert switched on or
+/// off once for every device (AlertSwitchesSection). A hub from before the switches lists none: only the permission
+/// shows, as before.
 struct NotificationSettingsView: View {
+    @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: SyncEngine
     @Binding var status: String
+    @State private var loadError: String?
 
     var body: some View {
+        // An alert whose module is off is left out: nothing would send it.
+        let alerts = engine.alerts.shown(with: model.modules)
         Form {
+            if !alerts.isEmpty || loadError != nil {
+                SwiftUI.Section {
+                    if !alerts.isEmpty {
+                        Text("Each kind of alert is switched on or off by itself, for every device. Off stops the alert only: the feature it belongs to goes on working.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        // Reminder alerts off (Settings, Modules) stops every notification on Apple devices, whatever these say.
+                        if !model.isOn(.notifications) {
+                            Text("\(remindersModuleTitle) is off in Settings, Modules: this device shows no notifications until it is on again.")
+                                .font(.caption).foregroundStyle(.warnText)
+                        }
+                    }
+                    if let loadError { Text(loadError).font(.caption).foregroundStyle(.dangerText) }
+                }
+                .themedRow()
+            }
             SwiftUI.Section {
                 LabeledContent("Permission", value: status)
                 Button("Request permission") {
@@ -398,15 +427,39 @@ struct NotificationSettingsView: View {
                         await engine.replanNotifications()
                     }
                 }
+            } header: {
+                if !alerts.isEmpty { Text("This device") }
             } footer: {
                 Text("Reminders reach you only when notifications are allowed.")
             }
             .themedRow()
+            if !alerts.isEmpty { AlertSwitchesSection(alerts: alerts) }
         }
         .formStyle(.grouped)
         .themedScreen()
         .navigationTitle("Notifications")
         .task { status = await Self.statusLabel() }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    /// The module's own title from the hub ("Reminder alerts"), so the line names what Settings, Modules shows.
+    private var remindersModuleTitle: String {
+        model.modules.first { $0.id == AppModule.notifications.rawValue }?.title ?? "Reminder alerts"
+    }
+
+    /// The switches as the hub has them now, with the modules that decide which of them show. Out of reach keeps
+    /// the ones this device last saw and says so.
+    private func load() async {
+        guard let c = engine.client else { return }
+        do {
+            let r = try await c.modulesAndAlerts()
+            model.applyModules(r.modules)
+            await engine.applyAlerts(r.alerts)
+            loadError = nil
+        } catch {
+            loadError = "Could not load the alert switches: \((error as? HubError)?.errorDescription ?? error.localizedDescription)"
+        }
     }
 
     static func statusLabel() async -> String {

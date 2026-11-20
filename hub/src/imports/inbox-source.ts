@@ -6,9 +6,9 @@ import type { Hub } from "../hub.js";
  * (imports/icloud.ts, icloudInbox) is the only source today; another (a Gmail account) is one more file like it, added
  * to INBOX_SOURCES in mail-inbox.ts. The screen, bundles, Pin and Snooze stay as they are.
  *
- * A source must keep to what iCloud's does: list the Inbox without marking anything read, fetch only what it lists
+ * A source must keep to what iCloud's does: list the Inbox (and the owner's replies to it) without marking anything read, fetch only what it lists
  * (text, the HTML for showing, pictures sent inside a mail), and change the mailbox only by moving a kept message
- * between the Inbox and the archive, after checking it is still that message.
+ * between the Inbox and the archive, or by marking one read or unread, after checking it is still that message.
  */
 
 export interface MailAddress { name: string; address: string }
@@ -37,6 +37,10 @@ export interface InboxMail {
   remote: string[];
   /** The brand's logo the mail provider verified (BIMI with a mark certificate), fetched by the hub; or null. */
   logo: { domain: string; url: string } | null;
+  /** The Message-IDs it answers (`In-Reply-To` and `References`), which put it in a thread. */
+  refs: string[];
+  /** The owner's own: a reply from the Sent folder, kept only while its thread is. */
+  mine: boolean;
 }
 
 /**
@@ -45,9 +49,12 @@ export interface InboxMail {
  *   said (no Inbox found), and then nothing is taken away;
  * - `mails`: messages since the time asked that the hub does not keep yet, newest first (`more` when there were too
  *   many for one refresh);
- * - `moved`: kept messages (by Message-ID) found under another id, not fetched again.
+ * - `moved`: kept messages (by Message-ID) found under another id, not fetched again;
+ * - `seen`: of `present`, the ids the mailbox has as read (read in another mail app counts), or null when not known;
+ * - `mails` also holds the owner's replies (`mine`) from the sent mail that answer kept mail or mail listed now;
+ * - `refs`: kept messages (`needsRefs`) with the Message-IDs they answer, for mail kept before threads.
  */
-export interface InboxListing { present: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; more: boolean }
+export interface InboxListing { present: string[] | null; seen: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; more: boolean; refs?: { id: string; refs: string[] }[]; /** How far the Sent folder has been read (`<UIDVALIDITY>:<UID>`), for the next refresh's `sentFrom`; absent when it was not read. */ sentAt?: string }
 
 /** One kept message to move: its id where it is, and the Message-ID the hub kept for it. */
 export interface MoveRef { id: string; message_id: string | null }
@@ -58,7 +65,9 @@ export interface InboxSource {
   /** Its linked accounts whose Inbox the Mail screen shows, as keys (`icloud:robin@icloud.com`). */
   accounts(hub: Hub): string[];
   /** One refresh (see InboxListing). `known` and `knownMessage` say what the hub keeps already. `owner`: Refresh pressed. */
-  list(hub: Hub, account: string, since: Date, known: (id: string) => boolean, knownMessage: (messageId: string) => boolean, opts: { owner?: boolean }): Promise<InboxListing>;
+  list(hub: Hub, account: string, since: Date, known: (id: string) => boolean, knownMessage: (messageId: string) => boolean, opts: { owner?: boolean; needsRefs?: (id: string) => boolean; sentFrom?: string | null }): Promise<InboxListing>;
   /** Done (to the archive) or Undo (back to the Inbox): each message's new id, or null when it was not moved. */
   move(hub: Hub, account: string, refs: MoveRef[], to: "archive" | "inbox"): Promise<Map<string, string | null>>;
+  /** Mark a kept message read or unread in the mailbox, after checking it is still that message; false when it was not. */
+  setSeen(hub: Hub, account: string, refs: MoveRef[], seen: boolean): Promise<boolean[]>;
 }

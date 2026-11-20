@@ -1,37 +1,63 @@
 import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { openExternal } from "../tauri/bridge";
 import { engine } from "../sync/engine";
+import { isTypingTarget } from "../lib/keys";
+import { useEntities } from "../sync/hooks";
+import type { Entity } from "@everythingapp/shared";
+import { completeTask, snoozeReminder } from "../sync/actions";
+import { createEntity } from "../sync/edits";
 import { usePoll } from "../lib/usePoll";
 import { useModules } from "../lib/modules";
 import { plainError } from "../lib/errors";
 import { fmtDateTime } from "../lib/time";
 import {
+  bundleClass,
   bundleOf,
+  deliveryAt,
+  dueReminders,
+  type DueReminder,
   frameLink,
+  inboxAt,
   inboxSections,
   initials,
+  isUnread,
   logoSrc,
+  MAIL_KEYS,
+  mailKeyAction,
+  type MailKey,
   matches,
   nameHidesAddress,
   personLabel,
   sendersLine,
   shownBundles,
   snoozeChoices,
+  SNOOZE_DEFAULTS,
   textParts,
+  threadRows,
   viewMessages,
   whenLabel,
   type Bundle,
+  type BundleDelivery,
+  type CustomBundle,
   type MailList,
+  NOTIFY_DEFAULTS,
+  type MailNotify,
   type MailMessage,
   type MailSummary,
+  type MailThread,
   type MailView,
+  type SnoozeTimes,
+  QUOTE_SELECTOR,
+  batches,
+  OPEN_UNREAD_MAX,
   type TextPart,
 } from "../lib/mail";
 
 /**
  * Mail (module mail_inbox): the iCloud Inbox in the app's own look, with Pin, Done and Snooze. Mail grouped by
  * day, kinds of mail gathered into colored bundles, and a side list of Inbox, Snoozed, Done and the bundles; the bar at
- * the top takes the color of where you are. A message opens in place as a card with its whole text.
+ * the top takes the color of where you are. A thread (a back-and-forth, the owner's replies in it) is one row, and opens
+ * in place as a card with its messages, the newest open.
  *
  * Mail is hostile input: its HTML only as the hub cleaned it, in a frame where nothing runs (MailFrame), else as text
  * with links only through textParts, which checks them; the sender's real address on every open message; and a brand's
@@ -47,12 +73,23 @@ interface LookValue {
   /** Done (to Archive) or back to the Inbox, with an Undo bar afterwards. */
   move: (ids: string[], to: "done" | "inbox") => Promise<void>;
   /** Snooze until a time (with Undo), or bring back now. */
-  snooze: (m: MailSummary, until: Date) => Promise<void>;
-  unsnooze: (m: MailSummary) => Promise<void>;
+  snooze: (m: MailThread, until: Date) => Promise<void>;
+  unsnooze: (m: MailThread) => Promise<void>;
   /** The open mail whose snooze choices show (a row's Snooze opens the mail with them). */
   snoozeFor: string | null; setSnoozeFor: (id: string | null) => void; openMail: (id: string) => void;
+  /** The owner's snooze times, from the hub. */
+  snoozeTimes: SnoozeTimes;
+  /** When each bundle's mail shows in the Inbox, from the hub. */
+  delivery: Record<string, BundleDelivery>;
+  /** Which new mail notifies, from the hub. */
+  notifyOn: MailNotify;
+  /** The keyboard's highlighted row (a thread's id, or `bundle:<day>:<bundle>`), and the selected threads. */
+  cursor: string | null;
+  selected: Set<string>;
+  /** Select or unselect a thread; `range`: everything from the last one picked (Shift-click). */
+  pick: (id: string, range: boolean) => void;
 }
-const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {} });
+const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {}, snoozeTimes: SNOOZE_DEFAULTS, delivery: {}, notifyOn: NOTIFY_DEFAULTS, cursor: null, selected: new Set(), pick: () => {} });
 export function Mail() {
   const list = usePoll((c) => c.mailList(), 60_000);
   const { on } = useModules();
@@ -62,18 +99,62 @@ export function Mail() {
   const [open, setOpen] = useState<string | null>(null);
   const [openBundles, setOpenBundles] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState(false);
-  const shown = shownBundles(on);
+  const shown = shownBundles(on, list.data?.custom_bundles ?? []);
+  // A bundle of the owner's being made ("new") or changed, shown in place of the list.
+  const [editing, setEditing] = useState<CustomBundle | "new" | null>(null);
   // A view of a bundle whose module was switched off goes back to the Inbox.
   useEffect(() => {
     if (view.startsWith("b:") && !shown.some((b) => b.id === view.slice(2))) setView("inbox");
   }, [view, shown]);
 
-  const messages = useMemo(() => (list.data?.messages ?? []).filter((m) => matches(m, q)), [list.data, q]);
-  const go = (v: MailView) => { setView(v); setOpen(null); setMenu(false); };
+  const threads = useMemo(() => threadRows(list.data?.messages ?? []), [list.data]);
+  // The owner's reminders that are due, among the mail in the Inbox (tasks are on every device already).
+  const tasks = useEntities("task");
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setClock(Date.now()), 60_000); return () => clearInterval(t); }, []);
+  const reminders = useMemo(() => dueReminders(tasks, new Date(clock)), [tasks, clock]);
+  const [newReminder, setNewReminder] = useState(false);
+  const [remindFor, setRemindFor] = useState<string | null>(null);
+  const delivery = list.data?.bundle_delivery ?? {};
+  // Search: a thread shows when any of its messages has every word.
+  const messages = useMemo(() => (q.trim() ? threads.filter((t) => t.members.some((m) => matches(m, q))) : threads), [threads, q]);
+  const go = (v: MailView) => { setView(v); setOpen(null); setMenu(false); setSelected(new Set()); setCursor(null); };
+  // Keyboard and selection: the highlighted row, the selected threads, the "?" list, Snooze for several.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [help, setHelp] = useState(false);
+  const [multiSnooze, setMultiSnooze] = useState(false);
+  const anchor = useRef<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  // Refresh, in the top bar: its result shows at the top of the list for a few seconds.
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (!refreshMsg) return;
+    const t = setTimeout(() => setRefreshMsg(null), 6000);
+    return () => clearTimeout(t);
+  }, [refreshMsg]);
+  const refresh = async () => {
+    const client = engine.client;
+    if (!client) return;
+    setRefreshing(true);
+    setRefreshMsg(null);
+    try {
+      const r = await client.mailRefresh();
+      const kept = r.mailboxes.reduce((n, m) => n + ("kept" in m ? m.kept : 0), 0);
+      const failed = r.mailboxes.filter((m) => "error" in m).length;
+      setRefreshMsg(failed ? { ok: false, text: `${failed === 1 ? "A mailbox" : `${failed} mailboxes`} could not be refreshed. The i at the bottom of the side list has why.` } : { ok: true, text: kept ? `${kept} new.` : "Nothing new." });
+      await list.reload();
+    } catch (e) {
+      setRefreshMsg({ ok: false, text: plainError(e) });
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const toggleBundle = (id: string) => setOpenBundles((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const here = view.startsWith("b:") ? shown.find((b) => b.id === view.slice(2)) : null;
   const title = here?.name ?? (view === "snoozed" ? "Snoozed" : view === "done" ? "Done" : "Inbox");
-  const barClass = here ? `b-${here.id}` : `v-${view}`;
+  const barClass = here ? bundleClass(here) : `v-${view}`;
   const [actErr, setActErr] = useState("");
   // The last Done or Sweep, for its Undo bar (gone after a few seconds, or with the next one).
   const [undo, setUndo] = useState<{ text: string; run: () => Promise<void> } | null>(null);
@@ -88,7 +169,13 @@ export function Mail() {
     if (!c || !ids.length) return;
     setActErr("");
     try {
-      const r = to === "done" ? await c.mailDone(ids) : await c.mailUndo(ids);
+      // A selection of any size: the hub takes 500 at a time.
+      const r: { moved: string[]; error?: string } = { moved: [] };
+      for (const part of batches(ids)) {
+        const one = to === "done" ? await c.mailDone(part) : await c.mailUndo(part);
+        r.moved.push(...one.moved);
+        if (one.error) { r.error = one.error; break; }
+      }
       if (r.error) setActErr(r.error);
       if (r.moved.length && to === "done") {
         const ids2 = r.moved;
@@ -123,35 +210,191 @@ export function Mail() {
     await list.reload();
   };
 
+  // The rows in the order shown, for the arrow keys: threads, and a bundle's row (with its threads while it is open).
+  const navItems = useMemo(() => {
+    if (!list.data || editing) return [];
+    if (view !== "inbox") return viewMessages(messages, view, shown).map((m) => m.id);
+    const out: string[] = pinnedOnly || q.trim() ? [] : reminders.map((r) => `rem:${r.id}`);
+    for (const s of inboxSections(messages, shown, { pinnedOnly, delivery })) {
+      for (const r of s.rows) {
+        if (r.kind === "mail") { out.push(r.mail.id); continue; }
+        const key = `${s.title}:${r.bundle.id}`;
+        out.push(`bundle:${key}`);
+        if (openBundles.has(key)) out.push(...r.mails.map((m) => m.id));
+      }
+    }
+    return out;
+  }, [list.data, editing, view, messages, shown, pinnedOnly, delivery, openBundles, reminders, q]);
+  const byId = useMemo(() => new Map(threads.map((t) => [t.id, t])), [threads]);
+  const pick: LookValue["pick"] = (id, range) => {
+    setSelected((s) => {
+      const n = new Set(s);
+      const from = anchor.current ? navItems.indexOf(anchor.current) : -1;
+      const to = navItems.indexOf(id);
+      if (range && from >= 0 && to >= 0) {
+        for (const x of navItems.slice(Math.min(from, to), Math.max(from, to) + 1)) if (byId.has(x)) n.add(x);
+      } else if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+    anchor.current = id;
+  };
+  const chosen = [...selected].map((id) => byId.get(id)).filter((t): t is MailThread => !!t);
+  // What D, S, P, U and R act on: the selection, else the open thread, else the highlighted one.
+  const targets = (): MailThread[] => chosen.length ? chosen : [open ? byId.get(open) : cursor ? byId.get(cursor) : undefined].filter((t): t is MailThread => !!t);
+  const doneAll = async (ts: MailThread[]) => {
+    const back = view === "done";
+    await move(ts.flatMap((t) => (back ? t.ids.done : t.ids.open)), back ? "inbox" : "done");
+    setSelected(new Set());
+  };
+  const pinAll = (ts: MailThread[]) => { const to = !ts.every((t) => t.pinned); void act(async (c) => { for (const t of ts) await c.mailPin(t.id, to); }); };
+  const readAll = (ts: MailThread[], read: boolean) => {
+    if (!read && open && ts.some((t) => t.id === open)) setOpen(null);
+    void act(async (c) => { for (const part of batches(ts.flatMap((t) => (read ? t.ids.unread : [t.id])))) await c.mailSeenMany(part, read); });
+  };
+  const snoozeAll = async (ts: MailThread[], until: Date) => {
+    const c = engine.client;
+    if (!c) return;
+    setActErr("");
+    try { for (const t of ts) await c.mailSnooze(t.id, until.toISOString()); } catch (e) { setActErr(plainError(e)); }
+    setUndo({ text: `${ts.length} snoozed until ${until.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`, run: async () => { for (const t of ts) await engine.client?.mailUnsnooze(t.id); await list.reload(); } });
+    setSelected(new Set());
+    setMultiSnooze(false);
+    await list.reload();
+  };
+
+  // The keys, before the app's own one-letter keys (this listens first, in the capture phase, and keeps the keys it uses).
+  const onKey = (a: MailKey, target: EventTarget | null): boolean => {
+    const at = cursor ? navItems.indexOf(cursor) : -1;
+    const moveTo = (i: number, extend: boolean) => {
+      const next = navItems[Math.max(0, Math.min(navItems.length - 1, i))];
+      if (!next) return;
+      if (extend) setSelected((s) => new Set([...s, ...[cursor, next].filter((x): x is string => !!x && byId.has(x))]));
+      setCursor(next);
+    };
+    switch (a) {
+      case "escape":
+        if (isTypingTarget(target)) { (target as HTMLElement).blur(); return true; }
+        if (help) { setHelp(false); return true; }
+        if (multiSnooze) { setMultiSnooze(false); return true; }
+        if (snoozeFor) { setSnoozeFor(null); return true; }
+        if (open) { setOpen(null); return true; }
+        if (selected.size) { setSelected(new Set()); return true; }
+        return false;
+      case "down": case "extend-down": moveTo(at < 0 ? 0 : at + 1, a === "extend-down"); return true;
+      case "up": case "extend-up": moveTo(at < 0 ? 0 : at - 1, a === "extend-up"); return true;
+      case "open":
+        if (!cursor) return false;
+        if (cursor.startsWith("rem:")) break;
+        if (cursor.startsWith("bundle:")) toggleBundle(cursor.slice(7)); else setOpen(open === cursor ? null : cursor);
+        return true;
+      case "select": if (!cursor || !byId.has(cursor)) return false; pick(cursor, false); return true;
+      case "search": searchRef.current?.focus(); return true;
+      case "help": setHelp((h) => !h); return true;
+    }
+    // A reminder row: Enter opens it in Tasks, D marks it done, S shows its snooze choices.
+    if (cursor?.startsWith("rem:") && !chosen.length && !open) {
+      const r = tasks.find((t) => t.id === cursor.slice(4));
+      if (!r) return false;
+      if (a === "open") { window.location.hash = `#/tasks?focus=${encodeURIComponent(r.id)}`; return true; }
+      if (a === "done") { void completeTask(r); return true; }
+      if (a === "snooze") { setRemindFor(remindFor === r.id ? null : r.id); return true; }
+      return false;
+    }
+    const ts = targets();
+    if (!ts.length) return false;
+    if (a === "done") void doneAll(ts);
+    else if (a === "pin") pinAll(ts);
+    else if (a === "read" || a === "unread") readAll(ts, a === "read");
+    else if (a === "snooze") {
+      if (ts.length > 1) setMultiSnooze(true);
+      else if (ts[0].state !== "done") { setOpen(ts[0].id); setSnoozeFor(ts[0].id); }
+    }
+    return true;
+  };
+  const keyRef = useRef(onKey);
+  keyRef.current = onKey;
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (!window.matchMedia("(min-width: 768px)").matches) return;
+      // Enter and Space on a button, link or field that has the focus are that control's own.
+      const on = e.target instanceof Element ? e.target.closest("button, a[href], summary, select, input, textarea, [role='button']") : null;
+      if (on && (e.key === "Enter" || e.key === " ")) return;
+      const a = mailKeyAction(e, isTypingTarget(e.target));
+      if (a && keyRef.current(a, e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
+    };
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
+  }, []);
+  // The highlighted row stays in view.
+  useEffect(() => {
+    if (cursor) document.querySelector(`[data-nav="${CSS.escape(cursor)}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [cursor]);
+
   return (
-    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id) }}>
-    <div className={`mailx${menu ? " menu-open" : ""}`}>
-      <div className={`mailx-bar ${barClass}`}>
+    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
+    <div className={`mailx${menu ? " menu-open" : ""}${selected.size ? " selecting" : ""}`}>
+      <div className={`mailx-bar ${barClass}${chosen.length ? " selecting" : ""}`}>
+        <div className="mailx-bar-left">
         <button type="button" className="mailx-menu" aria-label="Show Inbox, Snoozed, Done and the bundles" aria-expanded={menu} onClick={() => setMenu((x) => !x)}>
           <Icon name="menu" />
         </button>
-        <h1>{title}</h1>
-        <input type="search" className="mailx-search" placeholder="Search mail" aria-label="Search mail" value={q} onChange={(e) => setQ(e.target.value)} />
-        {view === "inbox" && (
-          <button type="button" className="mailx-switch" aria-pressed={pinnedOnly} onClick={() => setPinnedOnly((x) => !x)}>
-            <span className="lbl">Pinned only</span><span className="sw" aria-hidden="true" />
-          </button>
+        {chosen.length ? (
+          <div className="mailx-selbar" role="toolbar" aria-label="Selected mail">
+            <h1>{chosen.length} selected</h1>
+            <button type="button" onClick={() => void doneAll(chosen)}><Icon name={view === "done" ? "inbox" : "check"} /><span>{view === "done" ? "Move to Inbox" : "Done"}</span></button>
+            {view !== "done" && <button type="button" onClick={() => setMultiSnooze((x) => !x)}><Icon name="clock" /><span>Snooze</span></button>}
+            <button type="button" onClick={() => pinAll(chosen)}><Icon name="pin" /><span>{chosen.every((t) => t.pinned) ? "Unpin" : "Pin"}</span></button>
+            <button type="button" onClick={() => readAll(chosen, true)}><span>Mark read</span></button>
+            <button type="button" onClick={() => readAll(chosen, false)}><span>Mark unread</span></button>
+            <button type="button" className="mailx-selclear" onClick={() => { setSelected(new Set()); setMultiSnooze(false); }} aria-label="Clear the selection">✕</button>
+          </div>
+        ) : <h1>{title}</h1>}
+        </div>
+        {!chosen.length && (
+          <div className="mailx-bar-mid">
+            <button type="button" className={`mailx-refresh${refreshing ? " busy" : ""}`} aria-label={refreshing ? "Refreshing" : "Refresh"} title="Refresh" disabled={refreshing || !engine.client} onClick={() => void refresh()}>
+              <Icon name="refresh" />
+            </button>
+            <input ref={searchRef} type="search" className="mailx-search" placeholder="Search mail" aria-label="Search mail" value={q} onChange={(e) => setQ(e.target.value)} />
+            {/* Only the Inbox has it; elsewhere an unseen stand-in of its size keeps the search box in the same place. */}
+            <button type="button" className={`mailx-switch${view === "inbox" ? "" : " placeholder"}`} aria-pressed={pinnedOnly} aria-label="Pinned only" title="Pinned only" aria-hidden={view !== "inbox" || undefined} tabIndex={view === "inbox" ? undefined : -1} onClick={() => setPinnedOnly((x) => !x)}>
+              <span className="sw" aria-hidden="true"><span className="knob"><Icon name="pin" /></span></span>
+            </button>
+          </div>
+        )}
+        {!chosen.length && (
+          <div className="mailx-bar-right">
+            <button type="button" className="mailx-newrem" aria-expanded={newReminder} onClick={() => setNewReminder((x) => !x)} title="A reminder, saved as a task"><Icon name="plus" /><span>Reminder</span></button>
+          </div>
         )}
       </div>
       <div className="mailx-body">
         <nav className="mailx-rail" aria-label="Mail views">
-          <Nav view="inbox" current={view} go={go} icon="inbox" label="Inbox" count={list.data?.messages.filter((m) => m.state === "inbox").length} />
-          <Nav view="snoozed" current={view} go={go} icon="clock" label="Snoozed" count={list.data?.messages.filter((m) => m.state === "snoozed").length} />
+          <Nav view="inbox" current={view} go={go} icon="inbox" label="Inbox" count={threads.filter((m) => m.state === "inbox" && isUnread(m) && inboxAt(m, delivery)).length} />
+          <Nav view="snoozed" current={view} go={go} icon="clock" label="Snoozed" count={threads.filter((m) => m.state === "snoozed").length} />
           <Nav view="done" current={view} go={go} icon="check" label="Done" />
           <div className="mailx-label">Bundles</div>
-          {shown.filter((b) => !b.module).map((b) => <BundleNav key={b.id} b={b} current={view} go={go} list={list.data} />)}
+          {shown.filter((b) => !b.module && b.custom === undefined).map((b) => <BundleNav key={b.id} b={b} current={view} go={(v) => { setEditing(null); go(v); }} threads={threads} />)}
           {shown.some((b) => b.module) && <div className="mailx-label">From your modules</div>}
-          {shown.filter((b) => b.module).map((b) => <BundleNav key={b.id} b={b} current={view} go={go} list={list.data} />)}
-          {list.data && <Mailboxes data={list.data} reload={list.reload} />}
+          {shown.filter((b) => b.module).map((b) => <BundleNav key={b.id} b={b} current={view} go={(v) => { setEditing(null); go(v); }} threads={threads} />)}
+          <div className="mailx-label">Your bundles</div>
+          {shown.filter((b) => b.custom !== undefined).map((b) => <BundleNav key={b.id} b={b} current={view} go={(v) => { setEditing(null); go(v); }} threads={threads} />)}
+          <button type="button" className="mailx-nav mailx-newbundle" onClick={() => { setEditing("new"); setMenu(false); }}><span className="ico"><Icon name="plus" /></span>New bundle</button>
+          {list.data && <Mailboxes data={list.data} showKeys={() => setHelp(true)} />}
         </nav>
         {menu && <div className="mailx-scrim" onClick={() => setMenu(false)} aria-hidden="true" />}
         <div className="mailx-main">
           {actErr && <div className="error mailx-acterr" role="alert">{actErr}</div>}
+          {newReminder && <NewReminder close={() => setNewReminder(false)} />}
+          {refreshMsg && <div className={`small mailx-refreshmsg ${refreshMsg.ok ? "ok" : "error"}`} role="status">{refreshMsg.text}</div>}
+          {help && (
+            <div className="mailx-help" role="dialog" aria-label="Keyboard keys">
+              <b>Keyboard keys</b>
+              <dl>{MAIL_KEYS.map((k) => <Fragment key={k.keys}><dt>{k.keys}</dt><dd>{k.does}</dd></Fragment>)}</dl>
+              <button type="button" className="link" onClick={() => setHelp(false)}>Close</button>
+            </div>
+          )}
+          {multiSnooze && chosen.length > 0 && <MultiSnooze count={chosen.length} pick={(until) => void snoozeAll(chosen.filter((t) => t.state !== "done"), until)} close={() => setMultiSnooze(false)} />}
           {undo && (
             <div className="mailx-undo" role="status">
               <span>{undo.text}</span>
@@ -161,9 +404,13 @@ export function Mail() {
           {!list.data && list.error ? <div className="error">{list.error}</div>
             : !list.data ? <div className="muted small">Loading</div>
             : !list.data.mailboxes.length ? <div className="empty">Link an iCloud mailbox in <a href="#/settings/connections">Settings, Connections</a> to see your mail here.</div>
+            : editing
+              ? <BundleForm key={editing === "new" ? "new" : editing.id} start={editing === "new" ? null : editing} close={() => setEditing(null)}
+                  saved={async (id) => { setEditing(null); await list.reload(); if (id) go(`b:${id}` as MailView); else go("inbox"); }} />
             : view === "inbox"
-              ? <InboxList messages={messages} shown={shown} pinnedOnly={pinnedOnly} open={open} setOpen={setOpen} openBundles={openBundles} toggleBundle={toggleBundle} searching={!!q.trim()} waiting={!list.data.mailboxes.some((m) => m.last_refresh)} />
-              : <Flat messages={viewMessages(messages, view, shown)} view={view} bundle={here ?? null} open={open} setOpen={setOpen} />}
+              ? <InboxList reminders={pinnedOnly || q.trim() ? [] : reminders} tasks={tasks} remindFor={remindFor} setRemindFor={setRemindFor} messages={messages} shown={shown} delivery={delivery} pinnedOnly={pinnedOnly} open={open} setOpen={setOpen} openBundles={openBundles} toggleBundle={toggleBundle} searching={!!q.trim()} waiting={!list.data.mailboxes.some((m) => m.last_refresh)} />
+              : <Flat messages={viewMessages(messages, view, shown)} view={view} bundle={here ?? null} open={open} setOpen={setOpen}
+                  edit={here?.custom !== undefined ? () => setEditing(list.data?.custom_bundles?.find((c) => c.id === here.id) ?? null) : undefined} />}
           {list.data?.mailboxes.some((m) => m.more) && <div className="muted small mailx-hint">Bringing in more of your Inbox. The rest arrives over the next few minutes.</div>}
         </div>
       </div>
@@ -180,59 +427,74 @@ function Nav({ view, current, go, icon, label, count }: { view: MailView; curren
   );
 }
 
-function BundleNav({ b, current, go, list }: { b: Bundle; current: MailView; go: (v: MailView) => void; list: MailList | null }) {
+function BundleNav({ b, current, go, threads }: { b: Bundle; current: MailView; go: (v: MailView) => void; threads: MailThread[] }) {
   const view = `b:${b.id}` as MailView;
-  const n = list?.messages.filter((m) => m.state === "inbox" && m.bundle === b.id).length;
+  const n = threads.filter((m) => m.state === "inbox" && m.bundle === b.id && isUnread(m)).length;
   return (
-    <button type="button" className={`mailx-nav b-${b.id}`} aria-current={current === view ? "page" : undefined} onClick={() => go(view)}>
-      <span className="ico"><Icon name={b.id} /></span>{b.name}{!!n && <span className="n">{n}</span>}
+    <button type="button" className={`mailx-nav ${bundleClass(b)}`} aria-current={current === view ? "page" : undefined} onClick={() => go(view)}>
+      <span className="ico"><Icon name={b.custom !== undefined ? "own" : b.id} /></span>{b.name}{!!n && <span className="n">{n}</span>}
     </button>
   );
 }
 
-/** Each mailbox's last refresh or problem, and Refresh. */
-function Mailboxes({ data, reload }: { data: MailList; reload: () => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const client = engine.client;
-  const refresh = async () => {
-    if (!client) return;
-    setBusy(true);
-    setMsg(null);
-    try {
-      const r = await client.mailRefresh();
-      const kept = r.mailboxes.reduce((n, m) => n + ("kept" in m ? m.kept : 0), 0);
-      const failed = r.mailboxes.filter((m) => "error" in m).length;
-      setMsg(failed ? { ok: false, text: `${failed === 1 ? "A mailbox" : `${failed} mailboxes`} could not be refreshed.` } : { ok: true, text: kept ? `${kept} new.` : "Nothing new." });
-      await reload();
-    } catch (e) {
-      setMsg({ ok: false, text: plainError(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
+/** Notifications for new mail from people, and what they say (a bundle's switch is in its own view). */
+function NotifySettings() {
+  const { notifyOn, act } = useContext(Look);
   return (
-    <div className="mailx-boxes small">
-      <div className="row">
-        <button type="button" className="small" disabled={busy || !client} onClick={() => void refresh()}>{busy ? "Refreshing" : "Refresh"}</button>
-        {msg && <span className={msg.ok ? "ok" : "error"}>{msg.text}</span>}
-      </div>
-      {data.mailboxes.map((m) => (
-        <div key={m.email}>
-          <span className="muted">{m.email}: {m.last_refresh ? `refreshed ${fmtDateTime(m.last_refresh)}` : "not refreshed yet"}</span>
-          {m.last_error && <div className="error">{m.last_error}</div>}
-        </div>
-      ))}
-      <div className="muted">Nothing is marked read in iCloud. Done moves mail to Archive there; Undo moves it back.</div>
+    <div className="mailx-notify small">
+      <label><input type="checkbox" checked={notifyOn.people} onChange={(e) => void act((c) => c.mailNotify({ people: e.target.checked }))} /> Notify me of mail from people</label>
+      <label>Notifications show
+        <select value={notifyOn.detail} onChange={(e) => void act((c) => c.mailNotify({ detail: e.target.value as MailNotify["detail"] }))}>
+          <option value="full">sender and subject</option>
+          <option value="sender">sender only</option>
+          <option value="count">only a count</option>
+        </select>
+      </label>
     </div>
   );
 }
 
-function InboxList({ messages, shown, pinnedOnly, open, setOpen, openBundles, toggleBundle, searching, waiting }: {
-  messages: MailSummary[]; shown: Bundle[]; pinnedOnly: boolean; open: string | null; setOpen: (id: string | null) => void;
+/** Each mailbox's last refresh or problem, and Refresh. */
+/**
+ * The bottom of the side list: Keyboard keys, and an info button that opens the rest (each mailbox's last refresh,
+ * what changes in iCloud, notifications). A mailbox's problem puts a dot on the info button. Refresh is in the top bar.
+ */
+function Mailboxes({ data, showKeys }: { data: MailList; showKeys: () => void }) {
+  const [info, setInfo] = useState(false);
+  const trouble = data.mailboxes.some((m) => m.last_error);
+  return (
+    <div className="mailx-boxes small">
+      <div className="row">
+        <button type="button" className="small mailx-keysbtn" onClick={showKeys}>Keyboard keys</button>
+        <button type="button" className="small mailx-infobtn" aria-expanded={info} aria-label={trouble ? "Mailboxes and settings (a mailbox has a problem)" : "Mailboxes and settings"} title="Mailboxes and settings" onClick={() => setInfo(!info)}>
+          i{trouble && <span className="mailx-alertdot" />}
+        </button>
+      </div>
+      {info && (
+        <div className="mailx-info">
+          {data.mailboxes.map((m) => (
+            <div key={m.email}>
+              <span className="muted">{m.email}: {m.last_refresh ? `refreshed ${fmtDateTime(m.last_refresh)}` : "not refreshed yet"}</span>
+              {m.last_error && <div className="error">{m.last_error}</div>}
+            </div>
+          ))}
+          <div className="muted">Opening a mail marks it read in iCloud too; Done moves it to Archive there, and Undo moves it back.</div>
+          <NotifySettings />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InboxList({ reminders, tasks, remindFor, setRemindFor, messages, shown, delivery, pinnedOnly, open, setOpen, openBundles, toggleBundle, searching, waiting }: {
+  reminders: DueReminder[]; tasks: Entity[]; remindFor: string | null; setRemindFor: (id: string | null) => void;
+  messages: MailThread[]; shown: Bundle[]; delivery: Record<string, BundleDelivery>; pinnedOnly: boolean; open: string | null; setOpen: (id: string | null) => void;
   openBundles: Set<string>; toggleBundle: (id: string) => void; searching: boolean; waiting: boolean;
 }) {
-  const sections = inboxSections(messages, shown, { pinnedOnly });
+  const sections = inboxSections(messages, shown, { pinnedOnly, delivery });
+  // Due reminders lead "Today" (a "Today" of their own when no mail came today).
+  if (reminders.length && sections[0]?.title !== "Today") sections.unshift({ title: "Today", rows: [] });
+  const reminderRows = reminders.map((r) => <ReminderRow key={`rem:${r.id}`} r={r} task={tasks.find((t) => t.id === r.id)} picking={remindFor === r.id} setPicking={(on) => setRemindFor(on ? r.id : null)} />);
   if (!sections.length) {
     if (searching) return <div className="muted small">No mail has all of those words.</div>;
     if (waiting) return <div className="empty">Your Inbox arrives with the first refresh, a minute or so after the hub starts. Refresh brings it now.</div>;
@@ -240,13 +502,14 @@ function InboxList({ messages, shown, pinnedOnly, open, setOpen, openBundles, to
   }
   return (
     <div className="mailx-col">
-      {sections.map((s) => (
+      {sections.map((s, i) => (
         <section key={s.title} className="mailx-group">
           <h2>{s.title}<Sweep mails={s.rows.flatMap((r) => (r.kind === "mail" ? [r.mail] : r.mails))} /></h2>
           <div className="mailx-list">
+            {i === 0 && reminderRows}
             {s.rows.map((r) => r.kind === "mail"
               ? <Row key={r.mail.id} m={r.mail} open={open === r.mail.id} setOpen={setOpen} />
-              : <BundleRow key={`${s.title}:${r.bundle.id}`} b={r.bundle} mails={r.mails} isOpen={openBundles.has(`${s.title}:${r.bundle.id}`)} toggle={() => toggleBundle(`${s.title}:${r.bundle.id}`)} open={open} setOpen={setOpen} />)}
+              : <BundleRow key={`${s.title}:${r.bundle.id}`} nav={`bundle:${s.title}:${r.bundle.id}`} b={r.bundle} mails={r.mails} isOpen={openBundles.has(`${s.title}:${r.bundle.id}`)} toggle={() => toggleBundle(`${s.title}:${r.bundle.id}`)} open={open} setOpen={setOpen} />)}
           </div>
         </section>
       ))}
@@ -254,15 +517,91 @@ function InboxList({ messages, shown, pinnedOnly, open, setOpen, openBundles, to
   );
 }
 
-function Flat({ messages, view, bundle, open, setOpen }: { messages: MailSummary[]; view: MailView; bundle: Bundle | null; open: string | null; setOpen: (id: string | null) => void }) {
+/**
+ * A reminder that is due, among the mail: its title and when it came due; Done marks the task done, Snooze moves its
+ * time (a task that asks why, asks here too), and it opens in Tasks.
+ */
+function ReminderRow({ r, task, picking, setPicking }: { r: DueReminder; task: Entity | undefined; picking: boolean; setPicking: (on: boolean) => void }) {
+  const { cursor, snoozeTimes } = useContext(Look);
+  const [err, setErr] = useState("");
+  const snooze = async (until: Date) => {
+    if (!task) return;
+    let reason: string | undefined;
+    if (r.friction !== "none") {
+      reason = window.prompt(`Why snooze "${r.title}"?`) ?? undefined;
+      if (!reason?.trim()) return;
+    }
+    try { await snoozeReminder(task, until.toISOString(), reason); setPicking(false); } catch (e) { setErr(plainError(e)); }
+  };
+  return (
+    <div className={`mailx-item reminder${cursor === `rem:${r.id}` ? " cursor" : ""}`} data-nav={`rem:${r.id}`}>
+      <a className="mailx-row" href={`#/tasks?focus=${encodeURIComponent(r.id)}`}>
+        <span className="mailx-dotcol" />
+        <span className="mailx-av reminder" aria-hidden="true"><Icon name="bell" /></span>
+        <span className="mailx-what">
+          <span className="who"><b>{r.title}</b></span>
+          <span className="line">Reminder</span>
+        </span>
+        <span className="when">{whenLabel(r.at)}</span>
+      </a>
+      <span className="mailx-acts">
+        <button type="button" className="mailx-act" title="Snooze the reminder" aria-label="Snooze" onClick={() => setPicking(!picking)}><Icon name="clock" /></button>
+        <button type="button" className="mailx-act" title="Done: marks the task done" aria-label="Done" onClick={() => task && void completeTask(task).catch((e) => setErr(plainError(e)))}><Icon name="check" /></button>
+      </span>
+      {picking && (
+        <div className="mailx-snooze mailx-remsnooze">
+          {snoozeChoices(new Date(), snoozeTimes).map((c) => (
+            <button key={c.id} type="button" className="mailx-snooze-choice" onClick={() => void snooze(c.at)}>
+              <b>{c.label}</b><span>{c.at.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {err && <div className="error small mailx-card-pad">{err}</div>}
+    </div>
+  );
+}
+
+/** A new reminder from Mail: a title and a time, saved as a task like any other (Tasks, Reminders, its notification). */
+function NewReminder({ close }: { close: () => void }) {
+  const soon = new Date(Date.now() + 3600_000);
+  soon.setMinutes(0, 0, 0);
+  const local = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  const [title, setTitle] = useState("");
+  const [at, setAt] = useState(local(soon));
+  const [err, setErr] = useState("");
+  const save = async () => {
+    const when = new Date(at);
+    if (!title.trim() || Number.isNaN(when.getTime())) return;
+    try {
+      await createEntity("task", { title: title.trim().slice(0, 200), status: "scheduled", order: Date.now(), remind_at: when.toISOString(), friction: "none" });
+      close();
+    } catch (e) { setErr(plainError(e)); }
+  };
+  return (
+    <form className="mailx-newreminder" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+      <b>New reminder</b>
+      <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Call the dentist" maxLength={200} autoFocus aria-label="What to remember" />
+      <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} aria-label="When" />
+      <button type="submit" disabled={!title.trim()}>Save</button>
+      <button type="button" className="link" onClick={close}>Cancel</button>
+      {err && <span className="error small">{err}</span>}
+    </form>
+  );
+}
+
+function Flat({ messages, view, bundle, open, setOpen, edit }: { messages: MailThread[]; view: MailView; bundle: Bundle | null; open: string | null; setOpen: (id: string | null) => void; edit?: () => void }) {
+  const editButton = edit && <button type="button" className="mailx-act mailx-editbundle" onClick={edit}><Icon name="pencil" /><span>Edit bundle</span></button>;
   if (!messages.length) {
     if (view === "snoozed") return <Empty title="Nothing snoozed" text="Snoozed mail waits here until its time." />;
     if (view === "done") return <Empty title="Nothing done yet" text="Mail you mark done shows here." />;
-    return <div className="mailx-col">{bundle && <ModuleLink b={bundle} />}<Empty title={`No ${bundle?.name.toLowerCase() ?? ""} mail`} text="New mail of this kind gathers here." /></div>;
+    return <div className="mailx-col">{bundle && <ModuleLink b={bundle} />}{editButton}{bundle && <DeliveryControl b={bundle} mails={messages} />}<Empty title={`No ${bundle?.name.toLowerCase() ?? ""} mail`} text="New mail of this kind gathers here." /></div>;
   }
   return (
     <div className="mailx-col">
       {bundle && <ModuleLink b={bundle} />}
+      {editButton}
+      {bundle && <DeliveryControl b={bundle} mails={messages} />}
       <div className="mailx-list">
         {messages.map((m) => <Row key={m.id} m={m} open={open === m.id} setOpen={setOpen} />)}
       </div>
@@ -270,23 +609,127 @@ function Flat({ messages, view, bundle, open, setOpen }: { messages: MailSummary
   );
 }
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const at12 = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); const d = new Date(); d.setHours(h || 0, m || 0, 0, 0); return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); };
+
+/**
+ * When this bundle's mail shows in the Inbox: as it arrives, once a day, once a week, or never (only here). Held mail
+ * is always listed here; pinned mail always shows in the Inbox. Kept on the hub for every device.
+ */
+function DeliveryControl({ b, mails }: { b: Bundle; mails: MailThread[] }) {
+  const { delivery, act, notifyOn } = useContext(Look);
+  const d = delivery[b.id] ?? { mode: "now" };
+  const notifies = notifyOn.bundles.includes(b.id);
+  const save = (next: BundleDelivery) => void act((c) => c.mailBundleDelivery(b.id, next));
+  const held = mails.filter((m) => m.state === "inbox" && !m.pinned && !inboxAt(m, delivery));
+  const next = held.map((m) => deliveryAt(m.at, d)).filter((x): x is Date => !!x).sort((x, y) => x.getTime() - y.getTime())[0];
+  return (
+    <div className={`mailx-delivery ${bundleClass(b)}`}>
+      <label>Show in Inbox
+        <select value={d.mode} onChange={(e) => {
+          const mode = e.target.value as BundleDelivery["mode"];
+          save(mode === "daily" ? { mode, time: d.time ?? "07:00" } : mode === "weekly" ? { mode, time: d.time ?? "18:00", day: d.day ?? 0 } : { mode });
+        }}>
+          <option value="now">as it arrives</option>
+          <option value="daily">once a day</option>
+          <option value="weekly">once a week</option>
+          <option value="never">never (only here)</option>
+        </select>
+      </label>
+      <label title={d.mode === "never" ? "This bundle skips the Inbox, so it never notifies" : d.mode === "now" ? "A notification when new mail arrives in this bundle" : "A notification when this bundle's mail shows in your Inbox"}>
+        <input type="checkbox" checked={notifies} disabled={d.mode === "never"} onChange={(e) => void act((c) => c.mailNotify({ bundle: b.id, on: e.target.checked }))} /> Notify me
+      </label>
+      {d.mode === "weekly" && (
+        <label>on <select value={d.day ?? 0} onChange={(e) => save({ ...d, day: Number(e.target.value) })}>{WEEKDAYS.map((w, i) => <option key={w} value={i}>{w}</option>)}</select></label>
+      )}
+      {(d.mode === "daily" || d.mode === "weekly") && (
+        <label>at <input type="time" value={d.time ?? "07:00"} onChange={(e) => e.target.value && save({ ...d, time: e.target.value })} /></label>
+      )}
+      <span className="muted">
+        {d.mode === "never" ? "This bundle's mail stays out of your Inbox; it is all here."
+          : held.length && next ? `${held.length} waiting: ${next.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}.`
+          : d.mode === "daily" ? `New mail shows in your Inbox each day at ${at12(d.time ?? "07:00")}.`
+          : d.mode === "weekly" ? `New mail shows in your Inbox each ${WEEKDAYS[d.day ?? 0]} at ${at12(d.time ?? "18:00")}.`
+          : "Pinned mail always shows in your Inbox."}
+      </span>
+    </div>
+  );
+}
+
+/** One rule per line, as typed: blank lines and spaces at the ends left out. */
+const lines = (s: string) => s.split(/\r?\n|,/).map((x) => x.trim()).filter(Boolean);
+
+/**
+ * A bundle of the owner's, made or changed: a name, one of eight colors, and rules: mail from these addresses, from
+ * these domains (and domains under them), or whose subject has these words. Checked before the built-in bundles, so
+ * yours wins; a person's mail can be in one.
+ */
+function BundleForm({ start, close, saved }: { start: CustomBundle | null; close: () => void; saved: (id: string | null) => Promise<void> }) {
+  const [name, setName] = useState(start?.name ?? "");
+  const [color, setColor] = useState(start?.color ?? 0);
+  const [addresses, setAddresses] = useState((start?.addresses ?? []).join("\n"));
+  const [domains, setDomains] = useState((start?.domains ?? []).join("\n"));
+  const [words, setWords] = useState((start?.words ?? []).join("\n"));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const c = engine.client;
+  const save = async () => {
+    if (!c) return;
+    setBusy(true); setErr("");
+    try {
+      const b = { name, color, addresses: lines(addresses), domains: lines(domains), words: lines(words) };
+      const r = start ? await c.mailBundleUpdate({ ...b, id: start.id }) : await c.mailBundleAdd(b);
+      await saved(r.id);
+    } catch (e) { setErr(plainError(e)); setBusy(false); }
+  };
+  const remove = async () => {
+    if (!c || !start || !window.confirm(`Delete the bundle "${start.name}"? Its mail goes back to the other bundles; nothing in your mailbox changes.`)) return;
+    setBusy(true);
+    try { await c.mailBundleDelete(start.id); await saved(null); } catch (e) { setErr(plainError(e)); setBusy(false); }
+  };
+  return (
+    <form className="mailx-bundleform" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+      <h2>{start ? `Edit ${start.name}` : "New bundle"}</h2>
+      <label>Name <input value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="School" autoFocus /></label>
+      <div className="mailx-swatches" role="radiogroup" aria-label="Color">
+        {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+          <button key={i} type="button" role="radio" aria-checked={color === i} aria-label={`Color ${i + 1}`} className={`mailx-swatch b-custom cc${i}${color === i ? " on" : ""}`} onClick={() => setColor(i)} />
+        ))}
+      </div>
+      <p className="muted small">Mail goes in this bundle when it matches any line below. Your bundles are checked before the built-in ones, and a person's mail can be in one.</p>
+      <label>From these addresses <textarea rows={3} value={addresses} onChange={(e) => setAddresses(e.target.value)} placeholder={"coach@league.example\nsam@example.com"} /></label>
+      <label>From these domains (and any under them) <textarea rows={3} value={domains} onChange={(e) => setDomains(e.target.value)} placeholder="school.example" /></label>
+      <label>Subject has these words <textarea rows={3} value={words} onChange={(e) => setWords(e.target.value)} placeholder={"field trip\npermission slip"} /></label>
+      {err && <div className="error">{err}</div>}
+      <div className="row">
+        <button type="submit" disabled={busy || !name.trim()}>{start ? "Save" : "Make bundle"}</button>
+        <button type="button" className="link" onClick={close}>Cancel</button>
+        {start && <button type="button" className="link danger" onClick={() => void remove()}>Delete bundle</button>}
+      </div>
+    </form>
+  );
+}
+
 function ModuleLink({ b }: { b: Bundle }) {
   if (!b.module || !b.screen) return null;
   return (
-    <div className={`mailx-module b-${b.id}`}>
+    <div className={`mailx-module ${bundleClass(b)}`}>
       <span>Sorted using your {b.moduleName} records.</span>
       <a href={`#${b.screen}`}>Open {b.moduleName} ›</a>
     </div>
   );
 }
 
-function BundleRow({ b, mails, isOpen, toggle, open, setOpen }: { b: Bundle; mails: MailSummary[]; isOpen: boolean; toggle: () => void; open: string | null; setOpen: (id: string | null) => void }) {
+function BundleRow({ b, nav, mails, isOpen, toggle, open, setOpen }: { b: Bundle; nav: string; mails: MailThread[]; isOpen: boolean; toggle: () => void; open: string | null; setOpen: (id: string | null) => void }) {
+  const { cursor } = useContext(Look);
+  const unread = mails.filter(isUnread).length;
   return (
-    <div className={`mailx-bundle b-${b.id}${isOpen ? " open" : ""}`}>
-      <button type="button" className="mailx-row" aria-expanded={isOpen} onClick={toggle}>
-        <span className="mailx-av bundle"><Icon name={b.id} /></span>
+    <div className={`mailx-bundle ${bundleClass(b)}${isOpen ? " open" : ""}${cursor === nav ? " cursor" : ""}`} data-nav={nav}>
+      <button type="button" className={`mailx-row${unread ? " unread" : ""}`} aria-expanded={isOpen} onClick={toggle}>
+        <span className="mailx-dotcol">{!!unread && <span className="mailx-dot" title="Unread mail inside" />}</span>
+        <span className="mailx-av bundle"><Icon name={b.custom !== undefined ? "own" : b.id} /></span>
         <span className="mailx-what">
-          <span className="who"><b className="bname">{b.name}</b><span className="chip">{mails.length}</span></span>
+          <span className="who"><b className="bname">{b.name}</b><span className="chip">{unread ? `${unread} new` : mails.length}</span></span>
           <span className="line">{sendersLine(mails)}</span>
         </span>
         <span className="when">{whenLabel(mails[0].at)}</span>
@@ -302,15 +745,22 @@ function BundleRow({ b, mails, isOpen, toggle, open, setOpen }: { b: Bundle; mai
   );
 }
 
-function Row({ m, open, setOpen }: { m: MailSummary; open: boolean; setOpen: (id: string | null) => void }) {
+function Row({ m, open, setOpen }: { m: MailThread; open: boolean; setOpen: (id: string | null) => void }) {
+  const { cursor, selected, pick } = useContext(Look);
   if (open) return <Card m={m} close={() => setOpen(null)} />;
+  const picked = selected.has(m.id);
   // The row opens the mail; its actions show when it is pointed at or tabbed to (on a phone, open the mail for them).
+  // Its circle turns into a checkbox when pointed at, or while anything is selected.
   return (
-    <div className="mailx-item">
-      <button type="button" className="mailx-row" onClick={() => setOpen(m.id)}>
+    <div className={`mailx-item${cursor === m.id ? " cursor" : ""}${picked ? " picked" : ""}`} data-nav={m.id}>
+      <button type="button" className="mailx-pick" role="checkbox" aria-checked={picked} aria-label={`Select ${m.subject || "this mail"}`} onClick={(e) => pick(m.id, e.shiftKey)}>
+        <Icon name="check" />
+      </button>
+      <button type="button" className={`mailx-row${isUnread(m) ? " unread" : ""}`} onClick={() => setOpen(m.id)}>
+        <span className="mailx-dotcol">{isUnread(m) && <span className="mailx-dot" title="Unread" />}</span>
         <Avatar m={m} />
         <span className="mailx-what">
-          <span className="who"><b>{personLabel(m.from)}</b>{m.pinned && <span className="pinmark" title="Pinned"><Icon name="pin" /></span>}</span>
+          <span className="who"><b>{m.people}</b>{m.pinned && <span className="pinmark" title="Pinned"><Icon name="pin" /></span>}</span>
           <span className="line"><span className="subj">{m.subject || "(no subject)"}</span>{m.preview && <> · {m.preview}</>}</span>
         </span>
         <span className="when">{m.state === "snoozed" && m.snooze_until ? `Until ${whenLabel(m.snooze_until)}` : whenLabel(m.at)}</span>
@@ -329,12 +779,12 @@ function Avatar({ m }: { m: MailSummary }) {
   const logo = m.logo_domain ? logoSrc(logos[m.logo_domain]) : null;
   if (logo) return <span className="mailx-av logo" aria-hidden="true"><img src={logo} alt="" /></span>;
   const b = m.automated ? bundleOf(m, shown) : null;
-  if (b) return <span className={`mailx-av bundle b-${b.id}`} aria-hidden="true">{initials(m.from)}</span>;
+  if (b) return <span className={`mailx-av bundle ${bundleClass(b)}`} aria-hidden="true">{initials(m.from)}</span>;
   return <span className="mailx-av" aria-hidden="true">{initials(m.from)}</span>;
 }
 
 /** Pin or unpin: the pin filled while pinned. `labelled`: with its word beside it (an open mail's bar). */
-function PinButton({ m, labelled = false }: { m: MailSummary; labelled?: boolean }) {
+function PinButton({ m, labelled = false }: { m: MailThread; labelled?: boolean }) {
   const { act } = useContext(Look);
   const [busy, setBusy] = useState(false);
   const label = m.pinned ? "Unpin" : "Pin";
@@ -346,15 +796,15 @@ function PinButton({ m, labelled = false }: { m: MailSummary; labelled?: boolean
   );
 }
 
-/** Done (moves the mail to Archive in iCloud), or for done mail, Move to Inbox. */
-function DoneButton({ m, labelled = false }: { m: MailSummary; labelled?: boolean }) {
+/** Done (moves the thread's mail to Archive in iCloud), or for a done thread, Move to Inbox. */
+function DoneButton({ m, labelled = false }: { m: MailThread; labelled?: boolean }) {
   const { move } = useContext(Look);
   const [busy, setBusy] = useState(false);
   const back = m.state === "done";
   const label = back ? "Move to Inbox" : "Done";
   return (
     <button type="button" className="mailx-act" title={back ? "Move back to the Inbox in iCloud" : "Done: moves it to Archive in iCloud"} aria-label={label} disabled={busy}
-      onClick={async () => { setBusy(true); await move([m.id], back ? "inbox" : "done"); setBusy(false); }}>
+      onClick={async () => { setBusy(true); await move(back ? m.ids.done : m.ids.open, back ? "inbox" : "done"); setBusy(false); }}>
       <Icon name={back ? "inbox" : "check"} />{labelled && <span>{label}</span>}
     </button>
   );
@@ -364,7 +814,7 @@ function DoneButton({ m, labelled = false }: { m: MailSummary; labelled?: boolea
  * Snooze: shows the snooze choices on the open mail (a row's button opens it with them). For a snoozed mail, Unsnooze
  * brings it back now; its choices change the time.
  */
-function SnoozeButton({ m, labelled = false }: { m: MailSummary; labelled?: boolean }) {
+function SnoozeButton({ m, labelled = false }: { m: MailThread; labelled?: boolean }) {
   const { snoozeFor, setSnoozeFor, openMail, unsnooze } = useContext(Look);
   if (m.state === "done") return null;
   const showing = snoozeFor === m.id;
@@ -382,8 +832,9 @@ function SnoozeButton({ m, labelled = false }: { m: MailSummary; labelled?: bool
 }
 
 /** The snooze choices (later today, tomorrow, the weekend, next week) and a date and time of your own. */
-function SnoozePicker({ m }: { m: MailSummary }) {
-  const { snooze } = useContext(Look);
+function SnoozePicker({ m }: { m: MailThread }) {
+  const { snooze, snoozeTimes } = useContext(Look);
+  const [editing, setEditing] = useState(false);
   const [own, setOwn] = useState("");
   const [busy, setBusy] = useState(false);
   const go = async (at: Date) => { setBusy(true); await snooze(m, at); setBusy(false); };
@@ -391,7 +842,7 @@ function SnoozePicker({ m }: { m: MailSummary }) {
   const ownOk = !!ownAt && !Number.isNaN(ownAt.getTime()) && ownAt.getTime() > Date.now() + 60_000;
   return (
     <div className="mailx-snooze mailx-card-pad" role="group" aria-label="Snooze until">
-      {snoozeChoices().map((c) => (
+      {snoozeChoices(new Date(), snoozeTimes).map((c) => (
         <button key={c.id} type="button" className="mailx-snooze-choice" disabled={busy} onClick={() => void go(c.at)}>
           <b>{c.label}</b><span>{c.at.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}</span>
         </button>
@@ -401,15 +852,60 @@ function SnoozePicker({ m }: { m: MailSummary }) {
         <input type="datetime-local" value={own} onChange={(e) => setOwn(e.target.value)} />
         <button type="button" disabled={busy || !ownOk} onClick={() => ownAt && void go(ownAt)}>Snooze</button>
       </label>
+      <button type="button" className="link mailx-snooze-edit" aria-expanded={editing} onClick={() => setEditing(!editing)}>{editing ? "Close" : "Change these times"}</button>
+      {editing && <SnoozeTimesForm done={() => setEditing(false)} />}
     </div>
   );
 }
 
-/** Sweep: every unpinned mail here marked done at once (pinned mail stays), with one Undo. */
-function Sweep({ mails }: { mails: MailSummary[] }) {
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** What "Later today", "Tomorrow", "This weekend" and "Next week" mean, kept on the hub for every device. */
+function SnoozeTimesForm({ done }: { done: () => void }) {
+  const { snoozeTimes, act } = useContext(Look);
+  const [t, setT] = useState<SnoozeTimes>(snoozeTimes);
+  const [busy, setBusy] = useState(false);
+  const day = (k: "weekend_day" | "week_day") => (
+    <select value={t[k]} onChange={(e) => setT({ ...t, [k]: Number(e.target.value) })}>{DAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}</select>
+  );
+  const time = (k: "tomorrow" | "weekend_time" | "week_time") => <input type="time" value={t[k]} onChange={(e) => setT({ ...t, [k]: e.target.value })} />;
+  return (
+    <form className="mailx-snooze-times" onSubmit={async (e) => { e.preventDefault(); setBusy(true); await act((c) => c.mailSnoozeTimes(t)); setBusy(false); done(); }}>
+      <label>Later today <input type="number" min={1} max={12} value={t.later_hours} onChange={(e) => setT({ ...t, later_hours: Number(e.target.value) })} /> hours on</label>
+      <label>Tomorrow at {time("tomorrow")}</label>
+      <label>This weekend: {day("weekend_day")} at {time("weekend_time")}</label>
+      <label>Next week: {day("week_day")} at {time("week_time")}</label>
+      <div className="row"><button type="submit" disabled={busy}>Save</button><button type="button" className="link" onClick={() => setT(SNOOZE_DEFAULTS)}>Back to the usual times</button></div>
+    </form>
+  );
+}
+
+/** Snooze for several selected threads: the same choices, one task each. */
+function MultiSnooze({ count, pick, close }: { count: number; pick: (until: Date) => void; close: () => void }) {
+  const { snoozeTimes } = useContext(Look);
+  const [own, setOwn] = useState("");
+  const ownAt = own ? new Date(own) : null;
+  const ok = !!ownAt && !Number.isNaN(ownAt.getTime()) && ownAt.getTime() > Date.now() + 60_000;
+  return (
+    <div className="mailx-snooze mailx-multisnooze" role="group" aria-label={`Snooze ${count} until`}>
+      <b>Snooze {count} until</b>
+      {snoozeChoices(new Date(), snoozeTimes).map((c) => (
+        <button key={c.id} type="button" className="mailx-snooze-choice" onClick={() => pick(c.at)}>
+          <b>{c.label}</b><span>{c.at.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}</span>
+        </button>
+      ))}
+      <label className="mailx-snooze-own"><span>Pick a date and time</span><input type="datetime-local" value={own} onChange={(e) => setOwn(e.target.value)} />
+        <button type="button" disabled={!ok} onClick={() => ownAt && pick(ownAt)}>Snooze</button></label>
+      <button type="button" className="link mailx-snooze-edit" onClick={close}>Cancel</button>
+    </div>
+  );
+}
+
+/** Sweep: every unpinned thread here marked done at once (pinned ones stay), with one Undo. */
+function Sweep({ mails }: { mails: MailThread[] }) {
   const { move } = useContext(Look);
   const [busy, setBusy] = useState(false);
-  const ids = mails.filter((m) => !m.pinned && m.state !== "done").map((m) => m.id);
+  const ids = mails.filter((m) => !m.pinned && m.state !== "done").flatMap((m) => m.ids.open);
   if (!ids.length) return null;
   return (
     <button type="button" className="mailx-act mailx-sweep" title={`Mark ${ids.length} done (pinned mail stays)`} disabled={busy}
@@ -419,13 +915,74 @@ function Sweep({ mails }: { mails: MailSummary[] }) {
   );
 }
 
-/** An open message: the mail as sent (the hub's cleaned page), or its text; fetched from the hub when it opens. */
-function Card({ m, close }: { m: MailSummary; close: () => void }) {
-  const { snoozeFor } = useContext(Look);
+/**
+ * An open thread: its messages oldest first, the newest and any unread open, the others folded to a line each. A single
+ * mail opens as before. Opening reads the thread's unread mail: on the hub and in the mailbox (its read flag only).
+ */
+function Card({ m, close }: { m: MailThread; close: () => void }) {
+  const { snoozeFor, act, selected, pick } = useContext(Look);
+  const picked = selected.has(m.id);
+  // The unread messages that open by themselves: the newest few. Each open message is a frame of its own, and a
+  // thread of any length opening all at once is more than a page should carry.
+  const [openUnread] = useState(() => new Set(m.members.filter(isUnread).slice(-OPEN_UNREAD_MAX).map((x) => x.id)));
+  useEffect(() => {
+    if (m.ids.unread.length) void act(async (c) => { for (const part of batches(m.ids.unread)) await c.mailSeenMany(part, true); });
+    // Only when it opens: Mark unread must not be undone by the card that is closing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [m.id]);
+  const single = m.members.length === 1;
+  return (
+    <article className={`mailx-card${picked ? " picked" : ""}`} data-nav={m.id}>
+      {/* As on a row: the circle turns into a checkbox when pointed at, or while anything is selected. */}
+      <button type="button" className="mailx-pick" role="checkbox" aria-checked={picked} aria-label={`Select ${m.subject || "this mail"}`} onClick={(e) => pick(m.id, e.shiftKey)}>
+        <Icon name="check" />
+      </button>
+      <button type="button" className="mailx-card-head" onClick={close} aria-expanded="true">
+        <Avatar m={m} />
+        <span className="mailx-what">
+          <span className="subject">{m.subject || "(no subject)"}</span>
+          {/* The real address, always: a display name can say anything. A thread shows each message's below. */}
+          <span className="meta">{single ? <><b>{personLabel(m.from)}</b> &lt;{m.from.address}&gt; · {fmtDateTime(m.at)}</> : <>{m.people}</>}</span>
+        </span>
+      </button>
+      <div className="mailx-card-acts mailx-card-pad"><DoneButton m={m} labelled /><SnoozeButton m={m} labelled /><PinButton m={m} labelled />
+        <button type="button" className="mailx-act" title="Mark unread, here and in your mail app" onClick={() => { close(); void act((c) => c.mailSeen(m.id, false)); }}><Icon name="dot" /><span>Mark unread</span></button>
+      </div>
+      {m.state === "snoozed" && m.snooze_until && <div className="muted small mailx-card-pad">Snoozed until {fmtDateTime(m.snooze_until)}. It comes back to the top of your Inbox then; its task, called Snoozed mail, is in Tasks and Reminders.</div>}
+      {snoozeFor === m.id && <SnoozePicker m={m} />}
+      {single ? <Message m={m.members[0]} /> : m.members.map((x, i) => (
+        <ThreadMessage key={x.id} m={x} startOpen={i === m.members.length - 1 || openUnread.has(x.id)} />
+      ))}
+    </article>
+  );
+}
+
+/** One message of a thread: a line (who, when, first words) that opens to the whole message. */
+function ThreadMessage({ m, startOpen }: { m: MailSummary; startOpen: boolean }) {
+  const [open, setOpen] = useState(startOpen);
+  return (
+    <section className={`mailx-msg${open ? " open" : ""}${m.mine ? " mine" : ""}`}>
+      <button type="button" className="mailx-msg-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="who"><b>{m.mine ? "You" : personLabel(m.from)}</b> &lt;{m.from.address}&gt;</span>
+        <span className="when">{fmtDateTime(m.at)}</span>
+        {!open && <span className="line">{m.preview}</span>}
+      </button>
+      {open && <Message m={m} />}
+    </section>
+  );
+}
+
+/** One message's body: the mail as sent (the hub's cleaned page), or its text; fetched from the hub when it shows. */
+function Message({ m }: { m: MailSummary }) {
   const [full, setFull] = useState<MailMessage | null>(null);
   const [err, setErr] = useState("");
   const [asText, setAsText] = useState(false);
-  const [pictures, setPictures] = useState<{ busy: boolean; error: string }>({ busy: false, error: "" });
+  // The quoted history under a reply: folded until "•••" is pressed (its page marks it, or its text's quote line).
+  const [showQuote, setShowQuote] = useState(false);
+  const [pageQuote, setPageQuote] = useState(false);
+  const asPage = !!full?.html && !asText;
+  const hasQuote = asPage ? pageQuote : full?.quote_at !== undefined;
+  const text = full && !asPage && full.quote_at !== undefined && !showQuote ? full.text.slice(0, full.quote_at).trimEnd() : full?.text ?? "";
   useEffect(() => {
     let live = true;
     engine.client?.mailMessage(m.id).then((x) => { if (live) setFull(x); }).catch((e) => { if (live) setErr(plainError(e)); });
@@ -433,6 +990,7 @@ function Card({ m, close }: { m: MailSummary; close: () => void }) {
   }, [m.id]);
   // Show pictures (a hub without Tor): the hub fetches this mail's pictures from its sender now, and the mail comes
   // back with them written in.
+  const [pictures, setPictures] = useState<{ busy: boolean; error: string }>({ busy: false, error: "" });
   const showPictures = async () => {
     const c = engine.client;
     if (!c) return;
@@ -442,20 +1000,9 @@ function Card({ m, close }: { m: MailSummary; close: () => void }) {
       setPictures({ busy: false, error: "" });
     } catch (e) { setPictures({ busy: false, error: plainError(e) }); }
   };
-  const askPictures = !!full?.html && !asText && !!full.pictures_ask;
+  const askPictures = asPage && !!full?.pictures_ask;
   return (
-    <article className="mailx-card">
-      <button type="button" className="mailx-card-head" onClick={close} aria-expanded="true">
-        <Avatar m={m} />
-        <span className="mailx-what">
-          <span className="subject">{m.subject || "(no subject)"}</span>
-          {/* The real address, always: a display name can say anything. */}
-          <span className="meta"><b>{personLabel(m.from)}</b> &lt;{m.from.address}&gt; · {fmtDateTime(m.at)}</span>
-        </span>
-      </button>
-      <div className="mailx-card-acts mailx-card-pad"><DoneButton m={m} labelled /><SnoozeButton m={m} labelled /><PinButton m={m} labelled /></div>
-      {m.state === "snoozed" && m.snooze_until && <div className="muted small mailx-card-pad">Snoozed until {fmtDateTime(m.snooze_until)}. It comes back to the top of your Inbox then; its task, called Snoozed mail, is in Tasks and Reminders.</div>}
-      {snoozeFor === m.id && <SnoozePicker m={m} />}
+    <>
       {nameHidesAddress(m.from) && <div className="warn small mailx-card-pad">The sender's name shows a different address than the one it came from.</div>}
       {askPictures && (
         <div className="mailx-pictures mailx-card-pad small">
@@ -466,8 +1013,13 @@ function Card({ m, close }: { m: MailSummary; close: () => void }) {
       )}
       {err ? <div className="error mailx-card-pad">{err}</div>
         : !full ? <div className="muted small mailx-card-pad">Loading</div>
-        : full.html && !asText ? <div className="mailx-page"><MailFrame doc={full.html} title={m.subject || "Mail"} /></div>
-        : <div className="mailx-text mailx-card-pad"><Linked text={full.text} /></div>}
+        : asPage ? <div className="mailx-page"><MailFrame doc={full.html!} title={m.subject || "Mail"} showQuote={showQuote} onQuote={setPageQuote} /></div>
+        : <div className="mailx-text mailx-card-pad"><Linked text={text} /></div>}
+      {full && hasQuote && (
+        <div className="mailx-card-pad">
+          <button type="button" className="mailx-fold" aria-expanded={showQuote} title={showQuote ? "Hide the quoted text" : "Show the quoted text"} onClick={() => setShowQuote(!showQuote)}>•••</button>
+        </div>
+      )}
       {full && (
         <div className="mailx-card-foot mailx-card-pad muted small">
           {full.html ? (
@@ -478,9 +1030,12 @@ function Card({ m, close }: { m: MailSummary; close: () => void }) {
           ) : "Shown as text: this mail has no other version."}
         </div>
       )}
-    </article>
+    </>
   );
 }
+
+/** The tallest a mail's frame gets, in px (a long newsletter is 10,000 to 15,000). */
+const FRAME_MAX = 30_000;
 
 /**
  * The mail as sent, in a frame sandboxed without the permission to run scripts: nothing in it can run, whatever got past the hub's
@@ -488,11 +1043,22 @@ function Card({ m, close }: { m: MailSummary; close: () => void }) {
  * code reach in to size the frame to the mail and take its link clicks: a link opens in the browser (http, https or
  * mailto only), never inside the frame, and shows its real address when pointed at.
  */
-/** The tallest a mail's frame gets, in px (a long newsletter is 10,000 to 15,000). */
-const FRAME_MAX = 30_000;
-
-function MailFrame({ doc, title }: { doc: string; title: string }) {
+function MailFrame({ doc, title, showQuote, onQuote }: { doc: string; title: string; showQuote: boolean; onQuote: (has: boolean) => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const unfold = useRef(showQuote);
+  unfold.current = showQuote;
+  /** The page has quoted history and something besides it. */
+  const foldable = useRef(false);
+  // The quoted history: the page folds it (its body's `aeneas-fold`); this screen's code unfolds it on "•••".
+  useEffect(() => {
+    const d = ref.current?.contentDocument;
+    if (!d?.body) return;
+    d.body.classList.toggle("aeneas-fold", foldable.current && !showQuote);
+    // Measured as the frame's own fit does: at no height first, at most FRAME_MAX.
+    const frame = ref.current!;
+    frame.style.height = "0px";
+    frame.style.height = `${Math.min(Math.max(d.documentElement.scrollHeight, 60), FRAME_MAX)}px`;
+  }, [showQuote]);
   useEffect(() => {
     const frame = ref.current;
     if (!frame) return;
@@ -516,6 +1082,11 @@ function MailFrame({ doc, title }: { doc: string; title: string }) {
         frame.style.height = `${Math.min(Math.max(d.documentElement.scrollHeight, 60), FRAME_MAX)}px`;
       };
       for (const a of d.querySelectorAll("a[href]")) a.setAttribute("title", a.getAttribute("href") ?? "");
+      // Folded only when something is left to read: a forward (or any mail that is all quote) folded was a blank page.
+      d.body?.classList.add("aeneas-fold");
+      foldable.current = !!d.querySelector(QUOTE_SELECTOR) && !!d.body && (d.body.innerText.trim().length > 0 || !!d.body.querySelector("img"));
+      onQuote(foldable.current);
+      d.body?.classList.toggle("aeneas-fold", foldable.current && !unfold.current);
       d.addEventListener("click", onClick);
       observer = new ResizeObserver(fit);
       observer.observe(d.documentElement);
@@ -569,6 +1140,12 @@ const ICONS: Record<string, string> = {
   inbox: "M4 13l2.5-7h11L20 13v5H4zM4 13h4.5l1 2h5l1-2H20",
   clock: "M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16zM12 8v4l3 2",
   check: "m5 12.5 4.5 4.5L19 7.5",
+  bell: "M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20a2 2 0 0 0 4 0",
+  refresh: "M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4",
+  plus: "M12 5v14M5 12h14",
+  pencil: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
+  own: "M7 4h10v16l-5-4-5 4z",
+  dot: "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z",
   pin: "M9 4h6l-1 6 3 3H7l3-3zM12 13v7",
   sun: "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
   purchases: "M4 5h2l2 10h10l2-7H7M9 17.7a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6zM17 17.7a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6z",

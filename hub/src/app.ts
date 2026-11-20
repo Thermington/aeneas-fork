@@ -363,8 +363,11 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
         queue.push({ event, data }); wake?.();
       };
       const offChange = hub.bus.on("change", (e) => push("change", e));
-      const offNotify = hub.bus.on("notify", (e) => push("notify", e));
-      const offModules = hub.modules.onChange(() => push("modules", { modules: hub.modules.list() }));
+      // A kind of alert the owner switched off goes to no device (alerts.ts).
+      const offNotify = hub.bus.on("notify", (e) => { if (hub.alerts.on(e.kind)) push("notify", e); });
+      const sendModules = () => push("modules", { modules: hub.modules.list(), alerts: hub.alerts.list() });
+      const offModules = hub.modules.onChange(sendModules);
+      const offAlerts = hub.alerts.onChange(sendModules);
       // Removed while connected: the stream ends now, not when the device next reconnects.
       const offRevoke = keyed ? hub.deviceKeys.onRevoke((ids) => { if (ids.includes(keyed)) { open = false; wake?.(); try { stream.abort(); } catch { /* already gone */ } } }) : () => {};
       const ping = setInterval(() => push("ping", { time: nowIso() }), 25000);
@@ -385,6 +388,7 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
         offChange();
         offNotify();
         offModules();
+        offAlerts();
         offRevoke();
       }
     });

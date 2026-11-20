@@ -203,9 +203,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// The Watch has no /live stream, so it asks on launch, on return and when the iPhone comes back in reach.
+    /// The Watch has no /live stream, so it asks on launch, on return and when the iPhone comes back in reach. The
+    /// alert switches come in the same answer: the Watch has no page for them, but the reminder notifications and the
+    /// activity check-in it plans itself obey them (the engine keeps them in the Watch's app group).
     func refreshModules() async {
-        guard let c = engine.client, let list = try? await c.modules() else { return }
+        guard let c = engine.client, let r = try? await c.modulesAndAlerts() else { return }
+        let list = r.modules
         if let p = try? await c.profile(), p.pet != petName {
             petName = p.pet
             UserDefaults.standard.set(p.pet, forKey: "ea.petName")
@@ -225,6 +228,7 @@ final class AppModel: ObservableObject {
             if !on.isEmpty { await offerPermissions(for: on) }
         }
         if before.isOn(.notifications) != list.isOn(.notifications) { await engine.replanNotifications() }
+        await engine.applyAlerts(r.alerts)
     }
 
     private func offerPermissions(for list: [ModuleInfo]) async {

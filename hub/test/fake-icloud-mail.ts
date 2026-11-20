@@ -24,6 +24,8 @@ export interface Msg {
   html?: string;
   /** Raw header lines (List-Unsubscribe and the like), as the server sends them. */
   headers?: string;
+  /** Read (the \Seen flag). */
+  seen?: boolean;
 }
 
 export const FOLDERS: ImapFolder[] = [
@@ -38,7 +40,7 @@ export const FOLDERS: ImapFolder[] = [
 
 /** A fake iCloud for the Mail screen: folders, messages, and a record of every call and query. */
 export function fake(messages: Msg[], opts: { password?: string; noMove?: boolean } = {}) {
-  const seen = { connects: 0, logouts: 0, calls: [] as string[], opened: [] as { path: string; readOnly: unknown }[], fetches: [] as unknown[], searches: [] as Record<string, unknown>[], moves: [] as { from: string; uid: number; to: string }[] };
+  const seen = { connects: 0, logouts: 0, calls: [] as string[], opened: [] as { path: string; readOnly: unknown }[], fetches: [] as unknown[], searches: [] as Record<string, unknown>[], moves: [] as { from: string; uid: number; to: string }[], flags: [] as { uid: number; flags: string[]; add: boolean }[] };
   setImapFactory((login) => {
     let open: string | null = null;
     const find = (uid: string) => messages.find((m) => m.folder === open && String(m.uid) === uid);
@@ -73,7 +75,19 @@ export function fake(messages: Msg[], opts: { password?: string; noMove?: boolea
           ...(query.headers ? { headers: Buffer.from(`${m.references ? `References: ${m.references}\r\n` : ""}${m.headers ?? ""}\r\n`) } : {}),
         };
       },
+      async *fetch() {
+        seen.calls.push("fetch");
+        for (const m of messages.filter((x) => x.folder === open)) yield { uid: m.uid, flags: new Set(m.seen ? ["\\Seen"] : []) };
+      },
       ...({
+        async messageFlagsAdd(uid: string, flags: string[]) {
+          seen.calls.push("messageFlagsAdd"); seen.flags.push({ uid: Number(uid), flags, add: true });
+          const m = find(uid); if (m) m.seen = true; return !!m;
+        },
+        async messageFlagsRemove(uid: string, flags: string[]) {
+          seen.calls.push("messageFlagsRemove"); seen.flags.push({ uid: Number(uid), flags, add: false });
+          const m = find(uid); if (m) m.seen = false; return !!m;
+        },
         capabilities: new Map<string, unknown>(opts.noMove ? [] : [["MOVE", true], ["UIDPLUS", true]]),
         /** MOVE: the message goes to the destination folder under the next UID there. */
         async messageMove(uid: string, destination: string) {

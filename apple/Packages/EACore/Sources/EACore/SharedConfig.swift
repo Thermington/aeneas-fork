@@ -165,6 +165,20 @@ public final class SharedConfig: @unchecked Sendable {
         guard let m = modules?.first(where: { $0.id == AppModule.calendars.rawValue }) else { return false }
         return m.on && m.active == true
     }
+    /// The last alert switches from the hub (since 2026-11-20), kept beside the module switches so the alerts this
+    /// device plans itself obey them with no network, on the Watch too. Nil until the hub sends some: an older hub
+    /// never does.
+    public var alerts: [AlertInfo]? {
+        get { defaults.data(forKey: "alerts.cache").flatMap { try? JSONCoding.decode([AlertInfo].self, from: $0) } }
+        set { if let v = newValue, let d = try? JSONCoding.data(v) { defaults.set(d, forKey: "alerts.cache") } else { defaults.removeObject(forKey: "alerts.cache") } }
+    }
+    /// Whether alerts of one kind are wanted. Never fetched, an older hub, or a kind the hub does not list: on.
+    public func alertOn(_ kind: String) -> Bool { (alerts ?? []).isOn(kind) }
+    public func alertOn(_ kind: AlertKind) -> Bool { alertOn(kind.rawValue) }
+    /// Whether this device may plan or show a notification of one kind: Reminder alerts on (Settings, Modules), which
+    /// every notification of this device needs, and the kind's own switch on (Settings, Notifications).
+    public func notifies(_ kind: String) -> Bool { moduleOn(.notifications) && alertOn(kind) }
+    public func notifies(_ kind: AlertKind) -> Bool { notifies(kind.rawValue) }
     /// Feel changes made while the hub could not be reached, sent before the next fetch.
     public var feelPending: [String: JSONValue] {
         get { defaults.data(forKey: "feel.pending").flatMap { try? JSONCoding.decode([String: JSONValue].self, from: $0) } ?? [:] }

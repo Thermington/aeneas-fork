@@ -128,6 +128,11 @@ public struct AlertNotice: Equatable, Sendable {
             let text = Self.monitorText(name: name, state: state, error: error, hubTitle: n.title)
             title = StyleGuard.dashes(text.title)
             body = StyleGuard.dashes(text.body)
+        } else if n.kind == "mail" {
+            // New mail: the hub's line (a sender and subject, or a count) holds a sender's own words, so it goes under
+            // a title of the app's and cannot read as one of the hub's own alerts.
+            title = "New mail"
+            body = StyleGuard.dashes(n.title)
         } else {
             // An older hub sends the title alone ("Ollama down: connection refused").
             title = StyleGuard.dashes(n.title)
@@ -184,6 +189,18 @@ public final class ReminderScheduler: @unchecked Sendable {
     /// Reminder alerts (Settings, Modules) on: off, this device schedules and shows no local notifications.
     private var alertsOn: Bool { SharedConfig.shared.moduleOn(.notifications) }
 
+    /// One kind of alert may show here: Reminder alerts on, and the kind's own switch on (Settings, Notifications).
+    /// The hub sends no event of a kind that is off, but what this device plans by itself (a reminder's notification,
+    /// an activity's check-in) never passes the hub, and a switch can change while an event is on its way.
+    private func shows(_ kind: String) -> Bool { SharedConfig.shared.notifies(kind) }
+    private func shows(_ kind: AlertKind) -> Bool { shows(kind.rawValue) }
+
+    /// The check-in this device planned for the activity running now, kept while the app runs, so Activity check-ins
+    /// switched off and on again takes it off and puts it back.
+    private var checkin: (logId: String, name: String, start: Date, hours: Double)?
+    /// Whether activity check-ins could show at the last look, so only a change takes one off or puts it back.
+    private var checkinsShown: Bool?
+
     public func registerCategories() {
         // Done, as on the web and the Watch: it completes the task (a repeating one moves on). It said "Got it".
         let ack = UNNotificationAction(identifier: ReminderPlanner.ackAction, title: "Done", options: [])
@@ -235,8 +252,9 @@ public final class ReminderScheduler: @unchecked Sendable {
 
     /// Activity check-in: fire `hours` after an activity start so the question is asked with no hub.
     public func scheduleActivityCheckin(logId: String, name: String, start: Date, hours: Double = 3) async {
+        plannedLock.withLock { checkin = (logId, name, start, hours) }
         let fireAt = start.addingTimeInterval(hours * 3600)
-        guard fireAt > Date(), alertsOn else { return }
+        guard fireAt > Date(), shows(.activity) else { return }
         let content = UNMutableNotificationContent()
         content.title = "On \(name) for \(Int(hours)) h"
         content.body = "Still on it, or stop?"
@@ -250,14 +268,33 @@ public final class ReminderScheduler: @unchecked Sendable {
 
     /// Cancel every pending activity check-in (the activity ended).
     public func cancelActivityCheckins() async {
+        plannedLock.withLock { checkin = nil }
+        await takeOffActivityCheckins()
+    }
+
+    private func takeOffActivityCheckins() async {
         let pending = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix("activity|") }
         center.removePendingNotificationRequests(withIdentifiers: pending)
         center.removeDeliveredNotifications(withIdentifiers: pending)
     }
 
+    /// Activity check-ins switched off (Settings, Notifications, or Reminder alerts in Modules) takes the planned
+    /// check-in off; switched on again, the one planned for the activity still running comes back. Asked after every
+    /// replan, it does something only when the switch changed since the last time.
+    public func replanActivityCheckin() async {
+        let on = shows(.activity)
+        let changed = plannedLock.withLock { () -> Bool in
+            defer { checkinsShown = on }
+            return checkinsShown != on
+        }
+        guard changed else { return }
+        guard on else { await takeOffActivityCheckins(); return }
+        if let c = plannedLock.withLock({ checkin }) { await scheduleActivityCheckin(logId: c.logId, name: c.name, start: c.start, hours: c.hours) }
+    }
+
     /// Daily digest: a local notification with the digest's first line that deep-links to Today.
     public func notifyDigest(title: String, url: String = "everythingapp://today") async {
-        guard alertsOn else { return }
+        guard shows(.digest) else { return }
         let content = UNMutableNotificationContent()
         content.title = "Today"
         content.body = title
@@ -274,7 +311,7 @@ public final class ReminderScheduler: @unchecked Sendable {
     /// A plain alert (sensor, quiz, a monitor back up); a monitor down with its incident gets Acknowledge, and a tap
     /// opens Ops. A monitor's newer alert replaces its earlier one (`AlertNotice.id`).
     public func notifyAlert(_ n: NotifyEvent) async {
-        guard alertsOn else { return }
+        guard shows(n.kind) else { return }
         let a = AlertNotice(n)
         let content = UNMutableNotificationContent()
         content.title = a.title
@@ -306,7 +343,7 @@ public final class ReminderScheduler: @unchecked Sendable {
     /// moments ago, or past the plan's cap). It goes under the planned alert's id and is skipped when that alert showed
     /// or will (`ReminderPlanner.announcementNeedsAlert`).
     public func notifyNow(reminderId: String, title: String, friction: Friction, at: Date? = nil) async {
-        guard alertsOn else { return }
+        guard shows(.reminder) else { return }
         let now = Date()
         let delivered = await center.deliveredNotifications().map { (id: $0.request.identifier, date: $0.date) }
         guard ReminderPlanner.announcementNeedsAlert(reminderId: reminderId, at: at, now: now, planned: plannedIds, delivered: delivered) else { return }

@@ -6,7 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
-import type { MailList, MailMessage, MailMoved, MailRefresh } from "../lib/mail";
+import type { BundleDelivery, CustomBundle, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -23,6 +23,12 @@ export interface ModuleInfo {
   id: string; title: string; summary: string; example?: string; group: string; on: boolean;
   reads?: string; permissions?: ModulePermission[]; setup?: { minutes: string; needs: string };
 }
+
+/**
+ * A kind of alert the owner switches on or off on its own (GET /modules, `alerts`): a reminder, the morning summary,
+ * new mail and so on. `module` is the module it belongs to; the entry is left out of lists while that module is off.
+ */
+export interface AlertInfo { id: string; title: string; summary: string; module?: string; on: boolean }
 
 /** Every device has its own key (`ead1_...`); anything else is the hub's main key. */
 export const DEVICE_KEY_PREFIX = "ead1_";
@@ -906,11 +912,15 @@ export class HubClient {
   }
   /** Which modules are on, one setting for every device (Settings, Modules). */
   modules() {
-    return this.req<{ modules: ModuleInfo[] }>("GET", "/modules");
+    return this.req<{ modules: ModuleInfo[]; alerts?: AlertInfo[] }>("GET", "/modules");
   }
   /** Switch modules on or off: `{ pet: false }`. */
   setModules(changes: Record<string, boolean>) {
     return this.req<{ modules: ModuleInfo[] }>("PUT", "/modules", changes);
+  }
+  /** Switch kinds of alert on or off for every device: `{ mail: false }`. */
+  setAlerts(changes: Record<string, boolean>) {
+    return this.req<{ alerts: AlertInfo[] }>("PUT", "/modules/alerts", changes);
   }
   /** Change the owner's name, the pet's name (empty: no pet), or both. */
   setProfile(name?: string, pet?: string) {
@@ -987,6 +997,36 @@ export class HubClient {
   /** Back to the Inbox now; its task is deleted. */
   mailUnsnooze(id: string) {
     return this.req<{ ok: true }>("POST", `/mail/messages/${encodeURIComponent(id)}/unsnooze`, {});
+  }
+  /** Read or unread: on the hub, and in the mailbox (only its read flag). */
+  /** Several messages read or unread with one request (a thread's unread mails, a selection): at most 500. */
+  mailSeenMany(ids: string[], seen: boolean) {
+    return this.req<{ ok: number; seen: boolean; synced: number }>("POST", "/mail/seen", { ids, seen });
+  }
+  mailSeen(id: string, seen: boolean) {
+    return this.req<{ ok: true; seen: boolean; synced: boolean }>("POST", `/mail/messages/${encodeURIComponent(id)}/seen`, { seen });
+  }
+  /** The owner's own bundles: add, change, delete. */
+  mailBundleAdd(b: Omit<CustomBundle, "id">) {
+    return this.req<CustomBundle>("POST", "/mail/settings/custom-bundles", b);
+  }
+  mailBundleUpdate(b: CustomBundle) {
+    return this.req<CustomBundle>("PUT", `/mail/settings/custom-bundles/${encodeURIComponent(b.id)}`, { name: b.name, color: b.color, addresses: b.addresses, domains: b.domains, words: b.words });
+  }
+  mailBundleDelete(id: string) {
+    return this.req<{ ok: true }>("DELETE", `/mail/settings/custom-bundles/${encodeURIComponent(id)}`);
+  }
+  /** New-mail notifications: `people`, `detail`, or one bundle's switch (`bundle` with `on`). */
+  mailNotify(body: Partial<Pick<MailNotify, "people" | "detail">> & { bundle?: string; on?: boolean }) {
+    return this.req<MailNotify>("PUT", "/mail/settings/notify", body);
+  }
+  /** When a bundle's mail shows in the Inbox. */
+  mailBundleDelivery(bundle: string, d: BundleDelivery) {
+    return this.req<Record<string, BundleDelivery>>("PUT", `/mail/settings/bundles/${encodeURIComponent(bundle)}`, d);
+  }
+  /** The owner's snooze times (what "Tomorrow" and the rest mean). */
+  mailSnoozeTimes(times: Partial<SnoozeTimes>) {
+    return this.req<SnoozeTimes>("PUT", "/mail/settings/snooze", times);
   }
   /** Pin or unpin a mail: kept on the hub only. */
   mailPin(id: string, pinned: boolean) {

@@ -547,10 +547,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Fetch the switches; offline keeps the cached ones.
+    /// Fetch the switches, the alert switches with them (the engine holds those); offline keeps the cached ones.
     func refreshModules() async {
-        guard let c = engine.client, let list = try? await c.modules() else { return }
-        applyModules(list)
+        guard let c = engine.client, let r = try? await c.modulesAndAlerts() else { return }
+        await engine.applyAlerts(r.alerts)
+        applyModules(r.modules)
     }
 
     /// Switch modules on or off for every device; the hub answers with the whole list.

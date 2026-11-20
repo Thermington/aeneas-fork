@@ -7,11 +7,12 @@ export interface ChangeEvent { seq: number; id: string; kind: string }
  * `sensor` is a state change of a home sensor and carries `name`, `value`, `unit` and the new `state`;
  * `quiz` says the recall quiz for `date` is ready (id `quiz:<date>`); `monitor` is a homelab monitor going
  * `down` or back `up` (and the 6 hour re-notify of an unacknowledged incident) with `name`, `state` and `error`;
- * `disk` says the disk with the hub's data is almost full (diskspace.ts), its whole message in `title`.
+ * `disk` says the disk with the hub's data is almost full (diskspace.ts), its whole message in `title`;
+ * `mail` is new mail on the Mail screen (mail-inbox.ts, notifyNewMail), its sender and subject or a count in `title`.
  */
 export interface NotifyEvent {
   id: string;
-  kind: "reminder" | "digest" | "activity" | "sensor" | "quiz" | "monitor" | "disk";
+  kind: "reminder" | "digest" | "activity" | "sensor" | "quiz" | "monitor" | "disk" | "mail";
   title: string;
   at: string;
   friction?: string;
