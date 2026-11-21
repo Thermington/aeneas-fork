@@ -1693,3 +1693,5 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-nav.v-folder { --c: var(--b-other); --ct: var(--bt-other); }
 .mailx-folder-note { margin: 0 0 8px 4px; }
 .mailx-more { align-self: center; margin-top: 10px; }
+/* Move to: a small menu among an open mail's actions. */
+.mailx-movemenu { width: auto; min-height: 32px; padding: 4px 8px; font-size: 13px; }

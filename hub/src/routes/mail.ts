@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { bundleDelivery, folderMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { bundleDelivery, folderMail, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -105,6 +105,13 @@ export function mailRoutes() {
   };
   r.post("/mail/done", async (c) => c.json(await markDone(c.get("hub"), await ids(c))));
   r.post("/mail/undo", async (c) => c.json(await undoDone(c.get("hub"), await ids(c))));
+  // Delete (to Trash), Spam (to Junk), Not spam and Move to Inbox, or Move to one of your folders: MOVE only, nothing erased.
+  r.post("/mail/move", async (c) => {
+    const body = await readJsonObject(c);
+    if (typeof body.to !== "string") throw new StoreError(422, "to is inbox, trash, junk or one of your own folders");
+    if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > MOVE_MAX || !body.ids.every((x) => typeof x === "string")) throw new StoreError(422, `ids is a list of 1 to ${MOVE_MAX} mail ids`);
+    return c.json(await moveMail(c.get("hub"), body.ids as string[], body.to));
+  });
 
   // Snooze: on the hub only (the mail stays in iCloud's Inbox); a task called "Snoozed mail" reminds at `until`.
   r.post("/mail/messages/:id/snooze", async (c) => {

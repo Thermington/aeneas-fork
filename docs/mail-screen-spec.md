@@ -29,6 +29,7 @@ filer, no screen) but not `mail_inbox`, so today the iPhone app lists Mail only 
 | Read or unread | `POST /mail/seen` with `{ ids, seen }` | Batched, at most 500 ids a call |
 | Pin | `POST /mail/messages/:id/pin` | Pins the whole thread |
 | Done, Undo | `POST /mail/done`, `POST /mail/undo` with `{ ids }` | At most 500 a call |
+| Delete, Spam, Not spam, Move to **(next PR)** | `POST /mail/move` with `{ ids, to }` | `to`: `inbox`, `trash`, `junk` or an own folder's key |
 | Snooze, Unsnooze | `POST /mail/messages/:id/snooze` `{ until }`, `.../unsnooze` | |
 | Show pictures | `POST /mail/messages/:id/pictures` | Only on a hub without Tor (`pictures_ask`) |
 | Settings | `PUT /mail/settings/snooze`, `/bundles/:id`, `/notify`; `POST`/`PUT`/`DELETE /mail/settings/custom-bundles` | |
@@ -178,11 +179,19 @@ This part matters most. Mail is hostile input.
     shows Undo.
 - **Pin** applies to the whole thread. Pinned mail stays where it is, shows a pin, and Sweep passes it by.
 - **Read and unread:** the read flag syncs both ways with iCloud.
+- **Delete, Spam and Move to (next PR):** `POST /mail/move`, IMAP `MOVE` only, so nothing is erased from Aeneas.
+  - On an open thread: **Delete** (to Trash), **Spam** (to Junk) and a **Move to…** menu of the owner's folders. They
+    take the thread's received mail (`ids.open` and `ids.done`), never the owner's replies.
+  - In a folder: Spam has **Not spam** and Delete; Trash has **Move to Inbox** (and says mail is erased only from
+    Apple Mail); the owner's folders have Move to Inbox, Delete and Move to; Sent and Drafts have Delete only.
+  - **Undo** sends the mail back, using the new ids in the answer's `to`. There is none when the mail can't go back
+    (Sent, Drafts) or the hub doesn't know its new id. Deleted Done mail comes back to the Inbox.
 - **Selection:** click or Space on the circle; Shift extends it. The bar acts on everything selected: Done, Snooze
-  (one picker for all), Pin (Unpin when all are pinned), Mark read, Mark unread.
+  (one picker for all), Pin (Unpin when all are pinned), Mark read, Mark unread, Delete and Spam **(next PR)**.
 - **Keys (desktop):** ↑ ↓ to move, Shift + ↑ ↓ to select while moving, Enter to open (or open and close a bundle), Esc to
-  close and then clear the selection, Space to select, D Done, S Snooze, P Pin, U unread, R read, / search, ? the key
-  list (`MAIL_KEYS`). Never with Ctrl, Cmd or Alt, and never while typing (only Esc).
+  close and then clear the selection, Space to select, D Done, S Snooze, P Pin, U unread, R read, Delete or Backspace
+  Delete and ! Spam **(next PR)**, / search, ? the key list (`MAIL_KEYS`). Never with Ctrl, Cmd or Alt, and never
+  while typing (only Esc).
 
 ---
 
@@ -243,7 +252,7 @@ The hub sends new-mail alerts to devices. The client only offers the settings:
   - Spam says its pictures are never loaded and its links may not be safe.
   - An open spam mail warns: never sign in or pay through its links.
   - Drafts says to send or change them in Apple Mail.
-- **Folder mail is not marked read** when opened.
+- **Folder mail is not marked read** when opened. Its actions are in section 8.
 
 ---
 

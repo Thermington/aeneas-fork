@@ -6,7 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
-import type { BundleDelivery, CustomBundle, FolderMail, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
+import type { BundleDelivery, CustomBundle, FolderMail, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -1013,6 +1013,10 @@ export class HubClient {
   /** A reply's greeting and sign-off, suggested by the hub's local model (or the plain ones), to edit or drop. */
   mailGreeting(id: string) {
     return this.req<MailGreeting>("POST", `/mail/messages/${encodeURIComponent(id)}/greeting`, {});
+  }
+  /** Delete (trash), Spam (junk), Not spam or Move to Inbox (inbox), or Move to one of the owner's folders (its key). */
+  mailMove(ids: string[], to: MoveTarget) {
+    return this.req<MailMovedTo>("POST", "/mail/move", { ids, to });
   }
   /** One of the mailbox's other folders: its kept mail, newest first. */
   mailFolder(key: string) {

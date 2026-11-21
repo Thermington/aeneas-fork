@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -402,5 +402,14 @@ describe("mail folders", () => {
     const m = (folder_role: MailFolder["role"]): FolderMail => ({ id: "1", at: "2026-11-20T10:00:00Z", from: { name: "Robin", address: "robin@icloud.example" }, to: [{ name: "Alex", address: "alex@example.com" }, { name: "", address: "sam@example.com" }], subject: "Hi", preview: "", automated: false, bundle: null, state: "folder", pinned: false, folder_role });
     expect(folderWho(m("sent"))).toBe("To: Alex, sam@example.com");
     expect(folderWho(m("junk"))).toBe("Robin");
+  });
+});
+
+describe("mail move keys", () => {
+  const k = (key: string) => mailKeyAction({ key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }, false);
+  it("Delete and Backspace delete, ! is spam, never while typing", () => {
+    expect([k("Delete"), k("Backspace"), k("!")]).toEqual(["delete", "delete", "spam"]);
+    expect(mailKeyAction({ key: "Backspace", shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }, true)).toBeNull();
+    expect(MAIL_KEYS.some((x) => x.keys === "Delete") && MAIL_KEYS.some((x) => x.keys === "!")).toBe(true);
   });
 });

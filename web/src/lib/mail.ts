@@ -308,6 +308,12 @@ export const folderWho = (m: FolderMail) => (m.folder_role === "sent" || m.folde
 export interface MailMailbox { email: string; last_refresh: string | null; last_error: string | null; more: boolean }
 /** What Done or Undo did: the mails moved, how many were not, and the hub's words when some were not. */
 export interface MailMoved { moved: string[]; failed: number; error?: string }
+/**
+ * Where Delete, Spam, Not spam and Move to send mail (POST /mail/move): the Inbox, Trash, Junk, or one of the owner's
+ * folders by its key. `to` in the answer: each moved mail's new id where the hub keeps it (for Undo).
+ */
+export type MoveTarget = "inbox" | "trash" | "junk" | string;
+export interface MailMovedTo extends MailMoved { to: Record<string, string> }
 
 /** `logos`: the verified brand logos the messages use, by domain (a message's `logo_domain`). */
 export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify; folders?: MailFolder[] }
@@ -589,7 +595,7 @@ export function textParts(line: string): TextPart[] {
 // ---------------------------------------------------------------------------------------------------------------------
 // Keyboard (desktop): arrow keys to move, letters for actions
 
-export type MailKey = "down" | "up" | "extend-down" | "extend-up" | "open" | "escape" | "select" | "done" | "snooze" | "pin" | "unread" | "read" | "search" | "help";
+export type MailKey = "down" | "up" | "extend-down" | "extend-up" | "open" | "escape" | "select" | "done" | "snooze" | "pin" | "unread" | "read" | "delete" | "spam" | "search" | "help";
 
 /** The Mail screen's keys, for the "?" list. */
 export const MAIL_KEYS: ReadonlyArray<{ keys: string; does: string }> = [
@@ -602,6 +608,8 @@ export const MAIL_KEYS: ReadonlyArray<{ keys: string; does: string }> = [
   { keys: "S", does: "Snooze" },
   { keys: "P", does: "Pin or unpin" },
   { keys: "U / R", does: "Mark unread / read" },
+  { keys: "Delete", does: "Delete (moves it to Trash)" },
+  { keys: "!", does: "Spam (moves it to Spam)" },
   { keys: "/", does: "Search mail" },
   { keys: "?", does: "Show these keys" },
 ];
@@ -621,6 +629,8 @@ export function mailKeyAction(e: { key: string; shiftKey: boolean; ctrlKey: bool
     case " ": return "select";
     case "/": return "search";
     case "?": return "help";
+    case "!": return "spam";
+    case "Delete": case "Backspace": return "delete";
   }
   switch (e.key.toLowerCase()) {
     case "d": return "done";

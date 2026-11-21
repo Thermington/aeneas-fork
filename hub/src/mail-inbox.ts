@@ -722,6 +722,79 @@ export function wakeSnoozed(hub: Hub, now = new Date()): number {
 }
 
 /** Mail marked done: its snooze's task, if still open, is done too. */
+/** What Delete, Spam, Not spam and Move to did: the mail moved, and for each one now kept in a folder its new id (Undo takes it). */
+export interface MoveToResult extends MoveResult { to: Record<string, string> }
+
+/**
+ * Delete (`trash`), Spam (`junk`), Not spam and Move to Inbox (`inbox`), or Move to one of the owner's folders (its key):
+ * kept mail, from the Inbox (and Snoozed and Done) or a kept folder, moves there in iCloud (the source's moveTo: MOVE
+ * only, each message checked again), after any refresh or move that is running. On the hub, mail moved into a kept
+ * folder is kept there at once under its new id; mail moved to the Inbox comes in with the refresh that follows. A
+ * snoozed mail's task is done with it. Nothing is ever deleted from the mailbox: emptying Trash is the mail app's.
+ */
+export async function moveMail(hub: Hub, keys: string[], to: string, now = new Date()): Promise<MoveToResult> {
+  const db = hub.mailDb;
+  const dest = to === "inbox" || to === "trash" || to === "junk" ? null : (db.prepare("SELECT account, path FROM folders WHERE key = ? AND role = 'own'").get(to) as { account: string; path: string } | undefined);
+  if (to !== "inbox" && to !== "trash" && to !== "junk" && !dest) throw new StoreError(422, "to is inbox, trash, junk or one of your own folders");
+  const result = await exclusive(hub, async (): Promise<MoveToResult> => {
+    type Kept = { key: string; account: string; id: string; message_id: string | null; table: "inbox" | "folder_mail"; state?: MailState; folder?: string };
+    const inInbox = db.prepare("SELECT key, account, id, message_id, state FROM inbox WHERE key = ? AND state != 'sent'");
+    const inFolder = db.prepare("SELECT key, account, id, message_id, folder FROM folder_mail WHERE key = ?");
+    const rows: Kept[] = [];
+    for (const k of [...new Set(keys)].slice(0, MOVE_MAX)) {
+      const a = inInbox.get(k) as Kept | undefined;
+      const b = a ? undefined : (inFolder.get(k) as Kept | undefined);
+      if (a) rows.push({ ...a, table: "inbox" }); else if (b) rows.push({ ...b, table: "folder_mail" });
+    }
+    // Already where it is going: Inbox mail to the Inbox (Done's Undo does that), a folder's mail to its own folder.
+    const going = rows.filter((r) => !(r.table === "inbox" && to === "inbox") && !(dest && r.folder === dest.path) && (!dest || r.account === dest.account));
+    let failed = Math.min(keys.length, MOVE_MAX) - going.length;
+    const moved: string[] = [];
+    const newKeys: Record<string, string> = {};
+    let error: string | undefined;
+    for (const account of new Set(going.map((r) => r.account))) {
+      const mine = going.filter((r) => r.account === account);
+      try {
+        const source = sourceOf(account);
+        if (!source?.moveTo) throw new StoreError(409, "This mailbox is no longer linked.");
+        const target = dest ? { path: dest.path } : { role: to as "inbox" | "trash" | "junk" };
+        const ids = await source.moveTo(hub, account, mine.map((r) => ({ id: r.id, message_id: r.message_id })), target);
+        // The kept folder it lands in, if the hub keeps it: Trash, Junk, or the owner's folder.
+        const into = dest ? dest.path : to === "inbox" ? null : (db.prepare("SELECT path FROM folders WHERE account = ? AND role = ?").get(account, to) as { path: string } | undefined)?.path ?? null;
+        finishSnoozeTasks(hub, mine.filter((r) => r.table === "inbox" && ids.get(r.id)).map((r) => r.key), now);
+        db.transaction(() => {
+          const copyInbox = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen)
+            SELECT account, ?, ?, ?, message_id, at, from_name, from_address, '[]', reply_to, subject, text, automated, html, seen FROM inbox WHERE key = ?`);
+          const copyFolder = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen)
+            SELECT account, ?, ?, ?, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen FROM folder_mail WHERE key = ?`);
+          for (const r of mine) {
+            const id = ids.get(r.id);
+            if (!id) { failed++; continue; }
+            // A real new id (iCloud has UIDPLUS): kept in its folder now; otherwise the next refresh finds it there.
+            if (into && !id.startsWith("moved:")) {
+              const key = mailKey(account, id);
+              (r.table === "inbox" ? copyInbox : copyFolder).run(id, key, into, r.key);
+              newKeys[r.key] = key;
+            }
+            db.prepare(`DELETE FROM ${r.table} WHERE key = ?`).run(r.key);
+            moved.push(r.key);
+          }
+        }).immediate();
+      } catch (e) {
+        failed += mine.length;
+        error = e instanceof StoreError ? e.message : "The mail could not be moved. The hub's log has the error code.";
+        console.error(`[mail-inbox] ${mailboxLabel(hub, account)}: move ${errCode(e)}`);
+      }
+    }
+    if (moved.length) { db.pragma("wal_checkpoint(TRUNCATE)"); console.log(`[mail-inbox] move: ${moved.length} moved${failed ? `, ${failed} not moved` : ""}`); }
+    if (failed && !error) error = failed === 1 ? "One mail was not moved: it changed in iCloud since the last refresh. Refresh and try again." : `${failed} mails were not moved: they changed in iCloud since the last refresh. Refresh and try again.`;
+    return { moved, failed, to: newKeys, ...(error ? { error } : {}) };
+  });
+  // Mail moved to the Inbox comes in with a refresh (its bundle, thread and pictures as any new mail's).
+  if (to === "inbox" && result.moved.length) void refreshMail(hub).catch((e) => console.error(`[mail-inbox] ${errCode(e)}`));
+  return result;
+}
+
 function finishSnoozeTasks(hub: Hub, keys: string[], now: Date) {
   const db = hub.mailDb;
   const get = db.prepare("SELECT task_id FROM inbox WHERE key = ? AND task_id IS NOT NULL");

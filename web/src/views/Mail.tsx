@@ -24,6 +24,7 @@ import {
   type MailDraft,
   type FolderMail,
   type MailFolder,
+  type MoveTarget,
   FOLDER_ICONS,
   folderCount,
   folderLabel,
@@ -104,8 +105,15 @@ interface LookValue {
   selected: Set<string>;
   /** Select or unselect a thread; `range`: everything from the last one picked (Shift-click). */
   pick: (id: string, range: boolean) => void;
+  /**
+   * Delete, Spam, Not spam or Move to (POST /mail/move), with an Undo bar that sends the mail `back` when it can go back
+   * (null: no Undo, as for Sent and Drafts, where nothing may be moved).
+   */
+  relocate: (ids: string[], to: MoveTarget, said: string, back: MoveTarget | null) => Promise<void>;
+  /** The mailbox's other folders, for Move to. */
+  folders: MailFolder[];
 }
-const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {}, snoozeTimes: SNOOZE_DEFAULTS, delivery: {}, notifyOn: NOTIFY_DEFAULTS, cursor: null, selected: new Set(), pick: () => {} });
+const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {}, snoozeTimes: SNOOZE_DEFAULTS, delivery: {}, notifyOn: NOTIFY_DEFAULTS, cursor: null, selected: new Set(), pick: () => {}, relocate: async () => {}, folders: [] });
 export function Mail() {
   const list = usePoll((c) => c.mailList(), 60_000);
   const { on } = useModules();
@@ -199,6 +207,31 @@ export function Mail() {
         setUndo({ text: r.moved.length === 1 ? "Marked done" : `${r.moved.length} marked done`, run: () => move(ids2, "inbox") });
         if (open && r.moved.includes(open)) setOpen(null);
       } else if (to === "inbox") setUndo(null);
+    } catch (e) { setActErr(plainError(e)); }
+    await list.reload();
+  };
+  const relocate: LookValue["relocate"] = async (ids, to, said, back) => {
+    const c = engine.client;
+    if (!c || !ids.length) return;
+    setActErr("");
+    try {
+      const moved: string[] = [];
+      const kept: string[] = [];
+      let error: string | undefined;
+      for (const part of batches(ids)) {
+        const one = await c.mailMove(part, to);
+        moved.push(...one.moved);
+        kept.push(...one.moved.map((id) => one.to[id]).filter((x): x is string => !!x));
+        if (one.error) { error = one.error; break; }
+      }
+      if (error) setActErr(error);
+      if (moved.length) {
+        if (open && moved.includes(open)) setOpen(null);
+        setSelected(new Set());
+        // Undo only where the mail can go back, and only for mail the hub knows the new place of.
+        if (back && kept.length) setUndo({ text: moved.length === 1 ? said : `${moved.length} ${said.charAt(0).toLowerCase()}${said.slice(1)}`, run: () => relocate(kept, back, "Moved back", null) });
+        else setUndo(null);
+      }
     } catch (e) { setActErr(plainError(e)); }
     await list.reload();
   };
@@ -322,6 +355,8 @@ export function Mail() {
     if (a === "done") void doneAll(ts);
     else if (a === "pin") pinAll(ts);
     else if (a === "read" || a === "unread") readAll(ts, a === "read");
+    else if (a === "delete") void relocate(ts.flatMap(threadIds), "trash", "Moved to Trash", "inbox");
+    else if (a === "spam") void relocate(ts.flatMap(threadIds), "junk", "Moved to Spam", "inbox");
     else if (a === "snooze") {
       if (ts.length > 1) setMultiSnooze(true);
       else if (ts[0].state !== "done") { setOpen(ts[0].id); setSnoozeFor(ts[0].id); }
@@ -348,7 +383,7 @@ export function Mail() {
   }, [cursor]);
 
   return (
-    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
+    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), relocate, folders: list.data?.folders ?? [], snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
     <div className={`mailx${menu ? " menu-open" : ""}${selected.size ? " selecting" : ""}`}>
       <div className={`mailx-bar ${barClass}${chosen.length ? " selecting" : ""}`}>
         <div className="mailx-bar-left">
@@ -363,6 +398,8 @@ export function Mail() {
             <button type="button" onClick={() => pinAll(chosen)}><Icon name="pin" /><span>{chosen.every((t) => t.pinned) ? "Unpin" : "Pin"}</span></button>
             <button type="button" onClick={() => readAll(chosen, true)}><span>Mark read</span></button>
             <button type="button" onClick={() => readAll(chosen, false)}><span>Mark unread</span></button>
+            <button type="button" onClick={() => void relocate(chosen.flatMap(threadIds), "trash", "Moved to Trash", "inbox")}><Icon name="trash" /><span>Delete</span></button>
+            <button type="button" onClick={() => void relocate(chosen.flatMap(threadIds), "junk", "Moved to Spam", "inbox")}><Icon name="spam" /><span>Spam</span></button>
             <button type="button" className="mailx-selclear" onClick={() => { setSelected(new Set()); setMultiSnooze(false); }} aria-label="Clear the selection">✕</button>
           </div>
         ) : <h1>{title}</h1>}
@@ -482,7 +519,7 @@ function FolderView({ f, q, stamp, open, setOpen }: { f: MailFolder; q: string; 
       {f.role === "drafts" && <div className="muted small mailx-folder-note">Send or change a draft in Apple Mail.</div>}
       <div className="mailx-list">
         {hits.slice(0, shown).map((m) => open === m.id
-          ? <FolderCard key={m.id} m={m} close={() => setOpen(null)} />
+          ? <FolderCard key={m.id} m={m} f={f} close={() => setOpen(null)} />
           : (
             <div key={m.id} className="mailx-item">
               <button type="button" className={`mailx-row${m.seen ? "" : " unread"}`} onClick={() => setOpen(m.id)}>
@@ -503,7 +540,7 @@ function FolderView({ f, q, stamp, open, setOpen }: { f: MailFolder; q: string; 
 }
 
 /** A folder's mail open: its sender (and for what the owner wrote, who it went to), then the message as in the Inbox. */
-function FolderCard({ m, close }: { m: FolderMail; close: () => void }) {
+function FolderCard({ m, f, close }: { m: FolderMail; f: MailFolder; close: () => void }) {
   const mine = m.folder_role === "sent" || m.folder_role === "drafts";
   return (
     <article className="mailx-card">
@@ -514,6 +551,7 @@ function FolderCard({ m, close }: { m: FolderMail; close: () => void }) {
           <span className="meta">{mine ? <>To {m.to.map((a) => `${personLabel(a)} <${a.address}>`).join(", ") || "no one yet"}</> : <><b>{personLabel(m.from)}</b> &lt;{m.from.address}&gt;</>} · {fmtDateTime(m.at)}</span>
         </span>
       </button>
+      <div className="mailx-card-acts mailx-card-pad"><FolderActions m={m} f={f} /></div>
       {m.folder_role === "junk" && <div className="warn small mailx-card-pad">This mail is in Spam. Be careful with its links, and never sign in or pay through them.</div>}
       <Message m={m} />
     </article>
@@ -1053,6 +1091,56 @@ function MultiSnooze({ count, pick, close }: { count: number; pick: (until: Date
   );
 }
 
+/** A thread's mail that Delete, Spam and Move to take: its received mail in the Inbox, snoozed or done (never the owner's replies). */
+const threadIds = (m: MailThread) => [...m.ids.open, ...m.ids.done];
+
+/** Delete, Spam (`spam`) and Move to one of the owner's folders, for mail in the Inbox, Snoozed or Done; Undo sends it `back`. */
+function MoveButtons({ ids, back, spam = false }: { ids: string[]; back: MoveTarget | null; spam?: boolean }) {
+  const { relocate, folders } = useContext(Look);
+  const [busy, setBusy] = useState(false);
+  const go = async (to: MoveTarget, said: string) => { setBusy(true); await relocate(ids, to, said, back); setBusy(false); };
+  const own = folders.filter((f) => f.role === "own");
+  return (
+    <>
+      <button type="button" className="mailx-act" disabled={busy} title="Delete: moves it to Trash in iCloud" onClick={() => void go("trash", "Moved to Trash")}><Icon name="trash" /><span>Delete</span></button>
+      {spam && <button type="button" className="mailx-act" disabled={busy} title="Spam: moves it to Spam (Junk) in iCloud" onClick={() => void go("junk", "Moved to Spam")}><Icon name="spam" /><span>Spam</span></button>}
+      {!!own.length && <MoveMenu folders={own} disabled={busy} pick={(f) => void go(f.key, `Moved to ${folderLabel(f)}`)} />}
+    </>
+  );
+}
+
+/** Move to: one of the owner's folders. */
+function MoveMenu({ folders, disabled, pick }: { folders: MailFolder[]; disabled: boolean; pick: (f: MailFolder) => void }) {
+  return (
+    <select className="mailx-movemenu" aria-label="Move to a folder" disabled={disabled} value="" onChange={(e) => { const f = folders.find((x) => x.key === e.target.value); if (f) pick(f); }}>
+      <option value="">Move to…</option>
+      {folders.map((f) => <option key={f.key} value={f.key}>{folderLabel(f)}</option>)}
+    </select>
+  );
+}
+
+/**
+ * A folder mail's actions, by its folder: Spam has Not spam and Delete; Trash has Move to Inbox; the owner's folders have
+ * Move to Inbox, Delete and Move to; Sent and Drafts have Delete (no Undo: nothing is moved into Sent or Drafts).
+ */
+function FolderActions({ m, f }: { m: FolderMail; f: MailFolder }) {
+  const { relocate, folders } = useContext(Look);
+  const [busy, setBusy] = useState(false);
+  const go = async (to: MoveTarget, said: string, back: MoveTarget | null) => { setBusy(true); await relocate([m.id], to, said, back); setBusy(false); };
+  const here: MoveTarget = f.role === "own" ? f.key : f.role;
+  const others = folders.filter((x) => x.role === "own" && x.key !== f.key);
+  const toInbox = <button type="button" className="mailx-act" disabled={busy} onClick={() => void go("inbox", "Moved to Inbox", here)}><Icon name="inbox" /><span>{f.role === "junk" ? "Not spam" : "Move to Inbox"}</span></button>;
+  const del = <button type="button" className="mailx-act" disabled={busy} title="Delete: moves it to Trash in iCloud" onClick={() => void go("trash", "Moved to Trash", f.role === "sent" || f.role === "drafts" ? null : here)}><Icon name="trash" /><span>Delete</span></button>;
+  return (
+    <>
+      {(f.role === "junk" || f.role === "trash" || f.role === "own") && toInbox}
+      {f.role !== "trash" && del}
+      {f.role === "own" && !!others.length && <MoveMenu folders={others} disabled={busy} pick={(x) => void go(x.key, `Moved to ${folderLabel(x)}`, here)} />}
+      {f.role === "trash" && <span className="muted small">Mail in Trash is erased only from Apple Mail.</span>}
+    </>
+  );
+}
+
 /** Sweep: every unpinned thread here marked done at once (pinned ones stay), with one Undo. */
 function Sweep({ mails }: { mails: MailThread[] }) {
   const { move } = useContext(Look);
@@ -1102,6 +1190,7 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
       </button>
       <div className="mailx-card-acts mailx-card-pad"><DoneButton m={m} labelled /><SnoozeButton m={m} labelled /><PinButton m={m} labelled />
         <button type="button" className="mailx-act" title="Mark unread, here and in your mail app" onClick={() => { close(); void act((c) => c.mailSeen(m.id, false)); }}><Icon name="dot" /><span>Mark unread</span></button>
+        <MoveButtons ids={threadIds(m)} back="inbox" spam />
         {answer && <button type="button" className={`mailx-act${replying ? " on" : ""}`} aria-expanded={replying} title="Write a reply, saved to Drafts in iCloud" onClick={() => setReplying((x) => !x)}><Icon name="reply" /><span>Reply</span></button>}
       </div>
       {replying && answer && <Composer reply={answer} close={() => setReplying(false)} />}

@@ -724,6 +724,56 @@ export async function listFoldersICloud(hub: Hub, accountKey: string, since: Dat
   return out;
 }
 
+/**
+ * Where Delete, Spam, Not spam and Move to may put mail: the Inbox, Trash, Junk, or one of the owner's own folders (its
+ * path, as the hub kept it). Never Drafts, Sent or Archive (Done moves there), and never a path a request made up: the
+ * folder must be one iCloud lists now.
+ */
+export type MoveDest = { role: "inbox" | "trash" | "junk" } | { path: string };
+
+/**
+ * Move kept messages (from the Inbox, Archive or any shown folder) to `dest`, in one connection: the same fence as
+ * moveICloud. Only folders iCloud lists now take part; each message's folder must not have been reset (UIDVALIDITY) and
+ * its Message-ID is read again (BODY.PEEK) and compared; only MOVE, never a copy, a delete flag or an expunge. The answer
+ * has each message's new id, or null when it was not moved.
+ */
+export async function moveToICloud(hub: Hub, accountKey: string, refs: MoveRef[], dest: MoveDest): Promise<Map<string, string | null>> {
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  const out = new Map<string, string | null>(refs.map((r) => [r.id, null]));
+  await withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    const w = c as unknown as ImapClient & ImapMover;
+    if (typeof w.messageMove !== "function" || !w.capabilities?.has("MOVE")) throw new StoreError(502, "iCloud did not offer to move mail (IMAP MOVE), so nothing was moved.");
+    const folders = await c.list();
+    const inbox = inboxFolder(folders);
+    const archive = folders.find((f) => f.specialUse === "\\Archive" && !f.flags.has("\\Noselect")) ?? null;
+    const shown = shownFolders(folders);
+    const to = "path" in dest
+      ? shown.find((f) => f.path === dest.path && f.role === "own")?.path
+      : dest.role === "inbox" ? inbox?.path : shown.find((f) => f.role === dest.role)?.path;
+    if (!to) throw new StoreError(409, "That folder is not in this mailbox in iCloud (it was renamed or deleted). Refresh and try again.");
+    const sources = new Set([inbox?.path, archive?.path, ...shown.map((f) => f.path)].filter((p): p is string => !!p && p !== to));
+    const mine = refs.map((r) => ({ r, ref: parseId(r.id) })).filter((x) => !!x.ref && sources.has(x.ref.folder) && !!x.r.message_id);
+    for (const folder of new Set(mine.map((x) => x.ref!.folder))) {
+      const box = await w.mailboxOpen(folder, { readOnly: false });
+      for (const { r, ref } of mine.filter((x) => x.ref!.folder === folder)) {
+        if (String(box.uidValidity) !== ref!.validity) continue;
+        const msg = await c.fetchOne(ref!.uid, { envelope: true, bodyStructure: true, internalDate: true }, { uid: true });
+        if (!msg || bareId(msg.envelope?.messageId) !== r.message_id) continue;
+        const moved = await w.messageMove(ref!.uid, to, { uid: true });
+        if (!moved) continue;
+        const uid = moved.uidMap?.get(Number(ref!.uid));
+        out.set(r.id, uid && moved.uidValidity !== undefined ? messageId(moved.uidValidity, uid, to) : `moved:${r.id}`);
+      }
+    }
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // The Mail screen's one write: Done (Inbox to Archive) and its Undo (Archive to Inbox)
 
@@ -865,4 +915,5 @@ export const icloudInbox: InboxSource = {
   setSeen: (hub, account, refs, seen) => setSeenICloud(hub, account, refs, seen),
   saveDraft: (hub, account, raw) => saveDraftICloud(hub, account, raw),
   listFolders: (hub, account, since, known) => listFoldersICloud(hub, account, since, known),
+  moveTo: (hub, account, refs, dest) => moveToICloud(hub, account, refs, dest),
 };

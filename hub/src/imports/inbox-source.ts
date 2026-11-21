@@ -76,6 +76,8 @@ export interface InboxSource {
   setSeen(hub: Hub, account: string, refs: MoveRef[], seen: boolean): Promise<boolean[]>;
   /** Save a draft (an RFC 5322 message, mail-compose.ts) to the mailbox's Drafts folder; it throws when not saved. Never sends. */
   saveDraft?(hub: Hub, account: string, raw: Buffer): Promise<void>;
+  /** Delete (to Trash), Spam (to Junk), Not spam and Move to: each message's new id, or null when it was not moved (MOVE only). */
+  moveTo?(hub: Hub, account: string, refs: MoveRef[], dest: import("./icloud.js").MoveDest): Promise<Map<string, string | null>>;
   /** The mailbox's other folders (Drafts, Sent, Junk, Trash, its own), read-only like the Inbox: see FolderListing. */
   listFolders?(hub: Hub, account: string, since: Date, known: (id: string) => boolean): Promise<import("./icloud.js").FolderListing[]>;
 }
