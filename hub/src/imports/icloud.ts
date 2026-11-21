@@ -761,6 +761,22 @@ export async function attachmentsICloud(hub: Hub, accountKey: string, ref: MoveR
   });
 }
 
+/** A kept message's To and Cc as the mailbox has them now (Reply all), read-only and checked again; null when it is gone. */
+export async function recipientsICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<{ to: MailAddress[]; cc: MailAddress[] } | null> {
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    const kept = await openKept(c, ref);
+    if (!kept) return null;
+    const env = kept.msg.envelope ?? {};
+    return { to: (env.to ?? []).slice(0, 50).map(mailAddress), cc: (env.cc ?? []).slice(0, 50).map(mailAddress) };
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+}
+
 /**
  * One attachment's bytes, for a download the owner asked for: only a part the message's own structure lists as an
  * attachment, at most FILE_BYTES, read with BODY.PEEK, never kept. Null when the message or the part is not there.
@@ -1053,4 +1069,5 @@ export const icloudInbox: InboxSource = {
   moveTo: (hub, account, refs, dest) => moveToICloud(hub, account, refs, dest),
   attachments: (hub, account, ref) => attachmentsICloud(hub, account, ref),
   attachment: (hub, account, ref, part) => attachmentICloud(hub, account, ref, part),
+  recipients: (hub, account, ref) => recipientsICloud(hub, account, ref),
 };

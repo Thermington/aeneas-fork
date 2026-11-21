@@ -19,7 +19,7 @@ import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MO
 import { fetchBytesViaTor, fetchPublicBytes, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
 import { textCards, type MailCard } from "./mail-cards.js";
-import { assembled, buildMessage, checkedLine, checkedNew, checkedText, DRAFT_TEXT_MAX, GREETING_SYSTEM, greetingPrompt, plainGreeting, readSuggestion, replyFields } from "./mail-compose.js";
+import { assembled, buildMessage, checkedLine, checkedNew, checkedText, DRAFT_TEXT_MAX, forwardQuote, forwardSubject, replyAllCc, GREETING_SYSTEM, greetingPrompt, plainGreeting, readSuggestion, replyFields } from "./mail-compose.js";
 import { withPriority } from "./ai/backends.js";
 
 /**
@@ -960,7 +960,7 @@ export async function setSeen(hub: Hub, key: string, seen: boolean): Promise<{ o
 }
 
 /** `text`: the whole text saved, the greeting and sign-off around the owner's own words. */
-export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; subject: string; text: string; in_reply_to?: string }
+export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; cc?: string[]; subject: string; text: string; in_reply_to?: string }
 
 /**
  * Write mail as a draft (mail-compose.ts): a reply to a kept mail (`reply_to`, its id), or a new mail (`to`, `subject`,
@@ -971,7 +971,8 @@ export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; 
  */
 export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Promise<DraftResult> {
   const db = hub.mailDb;
-  const typed = checkedText(body.text);
+  // A forward may go without a note of its own (the forwarded mail is its text); anything else needs the owner's words.
+  const typed = body.forward !== undefined && (body.text === undefined || body.text === "") ? "" : checkedText(body.text);
   // The greeting and sign-off (suggested, then edited or dropped by the owner) are checked again here: short plain words.
   const line = (v: unknown, what: string) => {
     if (v === undefined || v === null || v === "") return null;
@@ -979,11 +980,24 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
     if (!ok) throw new StoreError(422, `${what} is at most 2 short lines of plain words: no links, addresses or long numbers`);
     return ok;
   };
-  const text = assembled(typed, line(body.greeting, "the greeting"), line(body.signoff, "the sign-off"));
+  let text = assembled(typed, line(body.greeting, "the greeting"), line(body.signoff, "the sign-off"));
   if (text.length > DRAFT_TEXT_MAX + 200) throw new StoreError(422, "the mail is too long");
   let account: string | undefined;
-  let fields: ReturnType<typeof replyFields>;
-  if (body.reply_to !== undefined) {
+  let fields: ReturnType<typeof replyFields> & { cc?: string[] };
+  if (body.forward !== undefined) {
+    // Forward: the owner's recipients (typed, checked as a new mail's), the kept mail's subject and words below.
+    if (typeof body.forward !== "string") throw new StoreError(422, "forward is a mail's id");
+    type Fwd = { account: string; from_name: string; from_address: string; subject: string; text: string; at: string; to_list?: string | null };
+    const m = (db.prepare("SELECT account, from_name, from_address, subject, text, at FROM inbox WHERE key = ?").get(body.forward) as Fwd | undefined)
+      ?? (db.prepare("SELECT account, from_name, from_address, subject, text, at, to_list FROM folder_mail WHERE key = ?").get(body.forward) as Fwd | undefined);
+    if (!m) throw new StoreError(404, "that message is not kept (it left the Inbox)");
+    const typedTo = checkedNew({ to: body.to });
+    let to: MailAddress[] = [];
+    try { to = m.to_list ? (JSON.parse(m.to_list) as MailAddress[]) : []; } catch { to = []; }
+    account = m.account;
+    fields = { to: typedTo.to, subject: forwardSubject(m.subject) };
+    text = [text, forwardQuote({ from: { name: m.from_name, address: m.from_address }, at: m.at, subject: m.subject, to, text: m.text })].filter(Boolean).join("\n\n");
+  } else if (body.reply_to !== undefined) {
     if (typeof body.reply_to !== "string") throw new StoreError(422, "reply_to is a mail's id");
     const r = db.prepare("SELECT account, from_address, subject, message_id, refs, mine FROM inbox WHERE key = ?").get(body.reply_to) as { account: string; from_address: string; subject: string; message_id: string | null; refs: string | null; mine: number } | undefined;
     if (!r) throw new StoreError(404, "that message is not kept (it left the Inbox)");
@@ -992,6 +1006,17 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
     try { refs = r.refs ? (JSON.parse(r.refs) as unknown[]).filter((x): x is string => typeof x === "string") : []; } catch { /* none */ }
     account = r.account;
     fields = replyFields({ from_address: r.from_address, subject: r.subject, message_id: r.message_id, refs });
+    // Reply all: everyone else on the mail, as the mailbox has its To and Cc now, never from the request.
+    if (body.reply_all === true) {
+      const kept = db.prepare("SELECT id, message_id FROM inbox WHERE key = ?").get(body.reply_to) as { id: string; message_id: string | null };
+      const source = sourceOf(r.account);
+      if (!source?.recipients) throw new StoreError(409, "this mailbox cannot say who a mail went to");
+      const who = await source.recipients(hub, r.account, kept);
+      if (!who) throw new StoreError(404, "This mail is not in the mailbox any more. Refresh and try again.");
+      const mine = INBOX_SOURCES.flatMap((s) => s.accounts(hub)).map((a) => a.slice(a.indexOf(":") + 1));
+      const cc = replyAllCc([...who.to, ...who.cc], [...mine, ...fields.to]);
+      if (cc.length) fields = { ...fields, cc };
+    }
   } else {
     fields = checkedNew(body);
     const all = INBOX_SOURCES.flatMap((s) => s.accounts(hub));
@@ -1003,7 +1028,7 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
   if (!source?.saveDraft) throw new StoreError(409, "this mailbox cannot keep drafts from Aeneas");
   const name = hub.profile.get().name.trim();
   const from: MailAddress = { name: name && name !== "the owner" ? name : "", address: account.slice(account.indexOf(":") + 1) };
-  const out: DraftResult = { saved: false, from, to: fields.to, subject: fields.subject, text, ...(fields.in_reply_to ? { in_reply_to: fields.in_reply_to } : {}) };
+  const out: DraftResult = { saved: false, from, to: fields.to, ...(fields.cc?.length ? { cc: fields.cc } : {}), subject: fields.subject, text, ...(fields.in_reply_to ? { in_reply_to: fields.in_reply_to } : {}) };
   if (body.preview === true) return out;
   const { raw } = buildMessage({ from, text, ...fields });
   const label = mailboxLabel(hub, account);
@@ -1019,8 +1044,7 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
  * The greeting and sign-off for a reply to a kept mail, suggested by the local model (never a cloud one) from the
  * owner's name and the thread's latest messages, their own words only. Nothing else of the owner's goes to it: no
  * memory facts, no records. What it writes is checked (checkedLine); without the model, or for what fails the check,
- * the plain ones ("Hi Alex," and "Thanks,
-Robin"). The owner sees both in the reply, and edits or drops them.
+ * the plain ones ("Hi Alex," and "Thanks, Robin"). The owner sees both in the reply, and edits or drops them.
  */
 export async function suggestGreeting(hub: Hub, key: string): Promise<{ greeting: string; signoff: string; by: "model" | "plain" }> {
   const db = hub.mailDb;

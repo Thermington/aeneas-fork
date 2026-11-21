@@ -283,6 +283,9 @@ Drafts only. Nothing is sent from Aeneas: a draft goes to iCloud's Drafts, and t
   client sends only `reply_to` and the text.** If the mail's Reply-To differs, say so: "This mail asks for replies to
   go to X. Your reply goes to the address it came from, Y."
 - **New mail** (top bar): To (plain addresses only), Subject and the text.
+- **Reply all** and **Forward** (next PR), beside Reply on an open thread (Forward on a folder's mail too): Reply all
+  sends `reply_all: true`, and the hub adds everyone else on the mail as Cc (the preview shows it). Forward has To and an
+  optional note, the mail quoted below it, and says its attachments are not included yet.
 - **Greeting and sign-off** (replies): when the reply opens, ask for them (`POST /mail/messages/:id/greeting`) and show
   each as an editable field above and below the text, with **Remove**. Never replace what the owner already typed in
   one. The hub checks both again: at most 2 lines of 60 characters, no links, addresses, long numbers or markup.

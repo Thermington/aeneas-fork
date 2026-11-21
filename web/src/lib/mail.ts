@@ -286,11 +286,11 @@ export function frameLink(href: string | null): string | null {
  * A draft to write (POST /mail/drafts): a reply (`reply_to`, a mail's id: the hub sets its recipient, subject and
  * thread) or a new mail (`to`, `subject`). `preview`: the hub says what it would save, and saves nothing.
  */
-export type MailDraftRequest = ({ reply_to: string } | { to: string; subject: string }) & { text: string; greeting?: string; signoff?: string; preview?: boolean };
+export type MailDraftRequest = ({ reply_to: string; reply_all?: boolean } | { forward: string; to: string } | { to: string; subject: string }) & { text: string; greeting?: string; signoff?: string; preview?: boolean };
 /** A reply's greeting and sign-off as suggested (POST /mail/messages/:id/greeting): by the local model, or the plain ones. */
 export interface MailGreeting { greeting: string; signoff: string; by: "model" | "plain" }
 /** What the hub saved to Drafts (or, for a preview, would save). */
-export interface MailDraft { saved: boolean; from: MailAddress; to: string[]; subject: string; text: string; in_reply_to?: string }
+export interface MailDraft { saved: boolean; from: MailAddress; to: string[]; cc?: string[]; subject: string; text: string; in_reply_to?: string }
 /**
  * The mailbox's other folders (GET /mail `folders`), kept on the hub like the Inbox and read-only: `role` is the part
  * iCloud marks it for (`own`: one of the owner's), `name` its own name (shown for `own`).

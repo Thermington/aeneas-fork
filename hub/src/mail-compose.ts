@@ -50,6 +50,8 @@ function mailbox(a: MailAddress): string {
 export interface Draft {
   from: MailAddress;
   to: string[];
+  /** Reply all: the others the mail went to (replyAllCc). */
+  cc?: string[];
   subject: string;
   text: string;
   /** A reply: the Message-ID it answers, and the thread's (References). */
@@ -64,6 +66,7 @@ export function buildMessage(d: Draft, now = new Date()): { raw: Buffer; message
   const headers = [
     `From: ${mailbox(d.from)}`,
     `To: ${d.to.join(", ")}`,
+    ...(d.cc?.length ? [`Cc: ${d.cc.join(", ")}`] : []),
     `Subject: ${encodeWords(oneLine(d.subject))}`,
     `Date: ${now.toUTCString().replace(/GMT$/, "+0000")}`,
     `Message-ID: <${message_id}>`,
@@ -139,6 +142,47 @@ export function readSuggestion(raw: string | null, fallback: { greeting: string;
 
 /** The draft's whole text: the greeting, the owner's text exactly as typed, the sign-off; each part apart by a blank line. */
 export const assembled = (text: string, greeting: string | null, signoff: string | null) => [greeting, text, signoff].filter((x): x is string => !!x).join("\n\n");
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Reply all and Forward (since 2026-11-21)
+
+/**
+ * Reply all's Cc: everyone else the mail went to (its To and Cc, as the mailbox has them now), each a plain address,
+ * once, never the owner's own addresses or the sender (who is To), at most TO_MAX.
+ */
+export function replyAllCc(all: MailAddress[], exclude: string[]): string[] {
+  const skip = new Set(exclude.map((x) => x.trim().toLowerCase()));
+  const out: string[] = [];
+  for (const a of all) {
+    const x = (a.address ?? "").trim().toLowerCase();
+    if (!isAddress(x) || skip.has(x) || out.includes(x)) continue;
+    out.push(x);
+    if (out.length >= TO_MAX) break;
+  }
+  return out;
+}
+
+/** A forward's subject: "Fwd: " and the mail's (not doubled). */
+export function forwardSubject(s: string): string {
+  const t = oneLine(s).slice(0, SUBJECT_MAX);
+  return /^\s*(fwd?|fw)\s*:/i.test(t) ? t : `Fwd: ${t}`.trim();
+}
+
+/** At most this much of the forwarded mail's text goes in. */
+export const FORWARD_TEXT_MAX = 100_000;
+
+/** What a forward carries below the owner's words: the mail's sender, date, subject and recipients, then its text. */
+export function forwardQuote(m: { from: MailAddress; at: string; subject: string; to: MailAddress[]; text: string }): string {
+  const who = (a: MailAddress) => (oneLine(a.name) ? `${oneLine(a.name).replace(/[<>]/g, "")} <${a.address}>` : a.address);
+  const head = [
+    "---------- Forwarded message ----------",
+    `From: ${who(m.from)}`,
+    `Date: ${new Date(m.at).toUTCString()}`,
+    `Subject: ${oneLine(m.subject)}`,
+    ...(m.to.length ? [`To: ${m.to.slice(0, TO_MAX).map(who).join(", ")}`] : []),
+  ];
+  return `${head.join("\n")}\n\n${m.text.slice(0, FORWARD_TEXT_MAX)}`;
+}
 
 /** The owner's text, checked: not empty, at most DRAFT_TEXT_MAX characters, kept as typed. */
 export function checkedText(v: unknown): string {
