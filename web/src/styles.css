@@ -1001,7 +1001,7 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 /* Mail (Mail.tsx): an inner side list, a bar colored by where you are, and the Inbox as one column of day groups. */
 .mailx { display: grid; grid-template-rows: auto minmax(0, 1fr); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); height: calc(100dvh - 40px); min-height: 420px; overflow: hidden; }
 /* The top bar: the title on the left, Refresh and search in the middle (the same place in every view), Pinned only on the right. */
-.mailx-bar { --barc: var(--b-inbox); background: var(--barc); color: #fff; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 560px) minmax(0, 1fr); align-items: center; gap: 12px; padding: 10px 14px; transition: background .25s; height: 56px; }
+.mailx-bar { --barc: var(--b-inbox); background: var(--barc); color: #fff; display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, 560px) minmax(max-content, 1fr); align-items: center; gap: 12px; padding: 10px 14px; transition: background .25s; height: 56px; }
 /* One height whatever the bar holds (the search box, or a selection's actions): 36px of controls, 64px on touch. */
 @media (pointer: coarse) { .mailx-bar { height: 64px; } }
 .mailx-bar.selecting { grid-template-columns: minmax(0, 1fr); }
@@ -1033,7 +1033,7 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-search:focus { outline: 2px solid #fff; outline-offset: 1px; }
 .mailx-switch { display: flex; align-items: center; gap: 8px; white-space: nowrap; flex: none; }
 .mailx-switch.placeholder { visibility: hidden; pointer-events: none; }
-.mailx-bar { grid-template-columns: minmax(0, 1fr) minmax(0, 680px) minmax(0, 1fr); }
+.mailx-bar { grid-template-columns: minmax(max-content, 1fr) minmax(0, 680px) minmax(max-content, 1fr); }
 /* Pinned only: the switch's circle carries the pin, gray while off, in the bar's color while on. */
 .mailx-switch .sw { width: 58px; height: 32px; border-radius: 16px; background: rgb(255 255 255 / .35); position: relative; }
 .mailx-switch .knob { position: absolute; top: 2px; left: 2px; width: 28px; height: 28px; border-radius: 50%; background: #fff; color: #6b7280; display: grid; place-items: center; transition: transform .2s; }
@@ -1324,7 +1324,25 @@ a.mailx-row { color: inherit; text-decoration: none; }
   .mailx-page { margin-left: 6px; margin-right: 6px; }
   .mailx-module { padding-left: 12px; }
 }
-@media (max-width: 480px) { .mailx-search { display: none; } }
+/*
+ * The phone layout's search (below 768px, where the bar holds the menu, the title and its buttons): a magnifier beside
+ * Refresh; tapped, the search field takes the whole bar, with a close button. Open while a search is typed.
+ */
+.mailx-search-btn, .mailx-search-close { display: none; }
+@media (max-width: 767px) {
+  .mailx-search { display: none; }
+  .mailx-search-btn, .mailx-search-close { place-items: center; width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: 50%; flex: none; }
+  .mailx-search-btn { display: grid; }
+  .mailx-search-btn:hover, .mailx-search-close:hover { background: rgb(0 0 0 / .2); }
+  .mailx-bar-mid { justify-content: flex-end; }
+  .mailx-bar.search-open { grid-template-columns: minmax(0, 1fr); }
+  .mailx-bar.search-open .mailx-bar-left, .mailx-bar.search-open .mailx-bar-right,
+  .mailx-bar.search-open .mailx-refresh, .mailx-bar.search-open .mailx-switch, .mailx-bar.search-open .mailx-search-btn { display: none; }
+  .mailx-bar.search-open .mailx-search { display: block; }
+  .mailx-bar.search-open .mailx-search-close { display: grid; font-size: 16px; }
+  /* The close button clears and closes: the browser's own clear button beside it would be a second ✕. */
+  .mailx-search::-webkit-search-cancel-button { display: none; }
+}
 @media (prefers-reduced-motion: reduce) { .mailx-bar, .mailx-rail, .mailx-switch .knob { transition: none; } }
 
 /* Wiki: sources and pages beside the page being read. */

@@ -147,6 +147,10 @@ export function Mail() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [help, setHelp] = useState(false);
   const [composing, setComposing] = useState(false);
+  // The phone layout's search: a button that opens a search field across the bar (open while a search is typed).
+  const [searchOpen, setSearchOpen] = useState(false);
+  const openSearch = () => { setSearchOpen(true); requestAnimationFrame(() => searchRef.current?.focus()); };
+  const closeSearch = () => { setQ(""); setSearchOpen(false); };
   const [multiSnooze, setMultiSnooze] = useState(false);
   const anchor = useRef<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -385,7 +389,7 @@ export function Mail() {
   return (
     <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), relocate, folders: list.data?.folders ?? [], snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
     <div className={`mailx${menu ? " menu-open" : ""}${selected.size ? " selecting" : ""}`}>
-      <div className={`mailx-bar ${barClass}${chosen.length ? " selecting" : ""}`}>
+      <div className={`mailx-bar ${barClass}${chosen.length ? " selecting" : ""}${searchOpen || q ? " search-open" : ""}`}>
         <div className="mailx-bar-left">
         <button type="button" className="mailx-menu" aria-label="Show Inbox, Snoozed, Done and the bundles" aria-expanded={menu} onClick={() => setMenu((x) => !x)}>
           <Icon name="menu" />
@@ -409,7 +413,9 @@ export function Mail() {
             <button type="button" className={`mailx-refresh${refreshing ? " busy" : ""}`} aria-label={refreshing ? "Refreshing" : "Refresh"} title="Refresh" disabled={refreshing || !engine.client} onClick={() => void refresh()}>
               <Icon name="refresh" />
             </button>
-            <input ref={searchRef} type="search" className="mailx-search" placeholder="Search mail" aria-label="Search mail" value={q} onChange={(e) => setQ(e.target.value)} />
+            <button type="button" className="mailx-search-btn" aria-label="Search mail" title="Search mail" onClick={openSearch}><Icon name="search" /></button>
+            <input ref={searchRef} type="search" className="mailx-search" placeholder="Search mail" aria-label="Search mail" value={q} onChange={(e) => setQ(e.target.value)} onBlur={() => { if (!q) setSearchOpen(false); }} />
+            <button type="button" className="mailx-search-close" aria-label="Close the search" title="Close the search" onClick={closeSearch}>✕</button>
             {/* Only the Inbox has it; elsewhere an unseen stand-in of its size keeps the search box in the same place. */}
             <button type="button" className={`mailx-switch${view === "inbox" ? "" : " placeholder"}`} aria-pressed={pinnedOnly} aria-label="Pinned only" title="Pinned only" aria-hidden={view !== "inbox" || undefined} tabIndex={view === "inbox" ? undefined : -1} onClick={() => setPinnedOnly((x) => !x)}>
               <span className="sw" aria-hidden="true"><span className="knob"><Icon name="pin" /></span></span>
@@ -1522,6 +1528,7 @@ const ICONS: Record<string, string> = {
   pencil: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
   reply: "M9 15l-5-5 5-5M4 10h10a6 6 0 0 1 6 6v3",
   send: "M4 12l16-8-6 16-3-7zM11 13l9-9",
+  search: "M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM16 16l4 4",
   spam: "M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6zM12 8v5M12 16v.5",
   trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",
   folder: "M3 6h6l2 2h10v11H3z",
