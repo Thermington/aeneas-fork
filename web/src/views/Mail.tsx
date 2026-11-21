@@ -23,6 +23,8 @@ import {
   cardLink,
   type MailCard,
   type MailDraft,
+  DRAFT_FILES_BYTES,
+  DRAFT_FILES_MAX,
   type FolderMail,
   type MailFolder,
   type MoveTarget,
@@ -553,6 +555,7 @@ function FolderView({ f, q, stamp, open, setOpen }: { f: MailFolder; q: string; 
 /** A folder's mail open: its sender (and for what the owner wrote, who it went to), then the message as in the Inbox. */
 function FolderCard({ m, f, close }: { m: FolderMail; f: MailFolder; close: () => void }) {
   const [forwarding, setForwarding] = useState(false);
+  const [editing, setEditing] = useState(false);
   const mine = m.folder_role === "sent" || m.folder_role === "drafts";
   return (
     <article className="mailx-card">
@@ -564,9 +567,11 @@ function FolderCard({ m, f, close }: { m: FolderMail; f: MailFolder; close: () =
         </span>
       </button>
       <div className="mailx-card-acts mailx-card-pad"><FolderActions m={m} f={f} />
-        <button type="button" className={`mailx-act${forwarding ? " on" : ""}`} aria-expanded={forwarding} onClick={() => setForwarding((x) => !x)}><Icon name="forward" /><span>Forward</span></button>
+        <button type="button" className={`mailx-act${forwarding ? " on" : ""}`} aria-expanded={forwarding} onClick={() => { setForwarding((x) => !x); setEditing(false); }}><Icon name="forward" /><span>Forward</span></button>
+        {f.role === "drafts" && <button type="button" className={`mailx-act${editing ? " on" : ""}`} aria-expanded={editing} onClick={() => { setEditing((x) => !x); setForwarding(false); }}><Icon name="pencil" /><span>Edit</span></button>}
       </div>
       {forwarding && <Composer forward={m} close={() => setForwarding(false)} />}
+      {editing && <Composer draft={{ m, email: f.email }} close={() => setEditing(false)} />}
       {m.folder_role === "junk" && <div className="warn small mailx-card-pad">This mail is in Spam. Be careful with its links, and never sign in or pay through them.</div>}
       <Message m={m} />
     </article>
@@ -1231,11 +1236,38 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
  * thread) or a new mail. Write, then Preview: the hub answers with the whole mail it would save, shown here as text,
  * and only Save to Drafts saves it, to iCloud's Drafts folder. The owner sends it from Apple Mail: nothing is sent here.
  */
-function Composer({ reply, all = false, forward, close }: { reply?: MailSummary; all?: boolean; forward?: MailSummary; close: () => void }) {
+/** A file's bytes as base64, for a draft. */
+const fileB64 = (f: File) => new Promise<string>((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
+  r.onerror = () => reject(r.error);
+  r.readAsDataURL(f);
+});
+
+function Composer({ reply, all = false, forward, draft, close }: { reply?: MailSummary; all?: boolean; forward?: MailSummary; draft?: { m: FolderMail; email: string }; close: () => void }) {
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState("");
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<MailDraft | null>(null);
+  // Files the owner attaches (read in this browser, sent with the draft), and whether a forward carries the mail's own.
+  const [files, setFiles] = useState<File[]>([]);
+  const [withTheirs, setWithTheirs] = useState(!!forward?.attachments);
+  const filesBytes = files.reduce((n, f) => n + f.size, 0);
+  const addFiles = (list: FileList | null) => {
+    const next = [...files, ...Array.from(list ?? [])].slice(0, DRAFT_FILES_MAX);
+    if (next.reduce((n, f) => n + f.size, 0) > DRAFT_FILES_BYTES) { setErr("The files are more than 15 MB together. Send big files from Apple Mail (Mail Drop)."); return; }
+    setErr("");
+    setFiles(next);
+  };
+  // Editing a draft: its words come from the hub (the list has only their start), its recipients and subject from the list.
+  useEffect(() => {
+    if (!draft) return;
+    setTo(draft.m.to.map((a) => a.address).join(", "));
+    setSubject(draft.m.subject);
+    let live = true;
+    engine.client?.mailMessage(draft.m.id).then((x) => { if (live) setText(x.text); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [draft?.m.id]);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -1265,7 +1297,8 @@ function Composer({ reply, all = false, forward, close }: { reply?: MailSummary;
     setErr("");
     try {
       const around = { ...(greeting?.trim() ? { greeting } : {}), ...(signoff?.trim() ? { signoff } : {}) };
-      const r = await c.mailDraft({ ...(reply ? { reply_to: reply.id, ...(all ? { reply_all: true } : {}) } : forward ? { forward: forward.id, to } : { to, subject }), text, ...around, ...(asPreview ? { preview: true } : {}) });
+      const sent = files.length ? await Promise.all(files.map(async (f) => ({ name: f.name, type: f.type, data: await fileB64(f) }))) : undefined;
+      const r = await c.mailDraft({ ...(reply ? { reply_to: reply.id, ...(all ? { reply_all: true } : {}) } : forward ? { forward: forward.id, to, ...(withTheirs ? { forward_attachments: true } : {}) } : { to, subject, ...(draft ? { replaces: draft.m.id, from: draft.email } : {}) }), text, ...around, ...(sent ? { files: sent } : {}), ...(asPreview ? { preview: true } : {}) });
       if (asPreview) setPreview(r); else setSaved(true);
     } catch (e) { setErr(plainError(e)); }
     setBusy(false);
@@ -1287,6 +1320,8 @@ function Composer({ reply, all = false, forward, close }: { reply?: MailSummary;
           <dt>From</dt><dd>{preview.from.name ? `${preview.from.name} <${preview.from.address}>` : preview.from.address}</dd>
           <dt>To</dt><dd>{preview.to.join(", ")}</dd>
           {!!preview.cc?.length && <><dt>Cc</dt><dd>{preview.cc.join(", ")}</dd></>}
+          {!!preview.files?.length && <><dt>Files</dt><dd>{preview.files.map((f) => `${f.name} (${fileSize(f.size)})`).join(", ")}</dd></>}
+          {forward && withTheirs && <><dt>Also</dt><dd>The mail's own attachments, added from iCloud when it is saved</dd></>}
           <dt>Subject</dt><dd>{preview.subject || "(no subject)"}</dd>
         </dl>
         <div className="mailx-compose-text">{preview.text}</div>
@@ -1310,7 +1345,9 @@ function Composer({ reply, all = false, forward, close }: { reply?: MailSummary;
           {!forward && <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" aria-label="Subject" maxLength={200} />}
         </>
       )}
-      {forward && <div className="muted small">The mail goes below your words. Its attachments are not included yet: forward from Apple Mail for those.</div>}
+      {forward && <div className="muted small">The mail goes below your words.</div>}
+      {forward && !!forward.attachments && <label className="mailx-check small"><input type="checkbox" checked={withTheirs} onChange={(e) => setWithTheirs(e.target.checked)} /> Include its attachments ({forward.attachments})</label>}
+      {draft && <div className="muted small">Saving puts this version in Drafts and moves the old one to Trash.</div>}
       {reply && !!smart.length && (
         <div className="mailx-smart" role="group" aria-label="Suggested replies">
           {smart.map((r) => <button key={r} type="button" className="mailx-smart-one" onClick={() => setText((t) => (t.trim() ? `${t.trimEnd()}\n${r}` : r))}>{r}</button>)}
@@ -1318,10 +1355,17 @@ function Composer({ reply, all = false, forward, close }: { reply?: MailSummary;
       )}
       {reply && <AroundLine label="Greeting" value={greeting} rows={1} waiting={suggesting} set={(v) => { touched.current.greeting = true; setGreeting(v); }} />}
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder={reply ? "Write your reply: just what you want to say" : forward ? "Add a note (optional)" : "Write your mail"} aria-label="Your mail" maxLength={50000} autoFocus />
+      {!!files.length && (
+        <ul className="mailx-att-list">
+          {files.map((f, i) => <li key={`${f.name}-${i}`}><Icon name="clip" /><span className="name">{f.name}</span><span className="muted small">{fileSize(f.size)}</span><button type="button" className="small" onClick={() => setFiles(files.filter((_, j) => j !== i))}>Remove</button></li>)}
+          <li className="muted small">{fileSize(filesBytes)} of 15 MB</li>
+        </ul>
+      )}
       {reply && <AroundLine label="Sign-off" value={signoff} rows={2} waiting={suggesting} set={(v) => { touched.current.signoff = true; setSignoff(v); }} />}
       <div className="mailx-compose-acts">
         <button type="submit" className="primary" disabled={busy || (!forward && !text.trim()) || (!reply && !to.trim())}>{busy ? "Checking" : "Preview"}</button>
         <button type="button" className="link" onClick={close}>Discard</button>
+        <label className="mailx-attach" title="Attach files (at most 10, 15 MB in all)"><Icon name="clip" /><span>Attach</span><input type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} /></label>
         <span className="muted small">Saved to Drafts in iCloud, to send from Apple Mail.</span>
         {err && <span className="error small" role="alert">{err}</span>}
       </div>

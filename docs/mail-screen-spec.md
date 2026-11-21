@@ -289,6 +289,12 @@ Drafts only. Nothing is sent from Aeneas: a draft goes to iCloud's Drafts, and t
 - **Greeting and sign-off** (replies): when the reply opens, ask for them (`POST /mail/messages/:id/greeting`) and show
   each as an editable field above and below the text, with **Remove**. Never replace what the owner already typed in
   one. The hub checks both again: at most 2 lines of 60 characters, no links, addresses, long numbers or markup.
+- **Files** (next PR): Attach in the writing box (at most 10, 15 MB in all), read in the browser and sent as base64 in
+  `files`; each listed with Remove; the preview names them. A forward of a mail with attachments has "Include its
+  attachments" (on by default), which the hub adds from iCloud when it is saved.
+- **Editing a draft** (next PR): Edit on a mail in Drafts opens the writing box with its recipients, subject and whole
+  text (from `GET /mail/messages/:id`); saving sends `replaces` and the mailbox's address as `from`, and says the old
+  version goes to Trash.
 - **Smart replies** (next PR): the greeting call's `replies`, shown as buttons above the text; one tapped goes into the
   text box (after what is typed), to edit like anything typed.
 - **Preview** (`preview: true`) shows the whole mail the hub would save: From, To, Subject, and the full text

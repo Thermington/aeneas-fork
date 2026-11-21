@@ -761,8 +761,12 @@ export async function attachmentsICloud(hub: Hub, accountKey: string, ref: MoveR
   });
 }
 
-/** A kept message's To and Cc as the mailbox has them now (Reply all), read-only and checked again; null when it is gone. */
-export async function recipientsICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<{ to: MailAddress[]; cc: MailAddress[] } | null> {
+/**
+ * A kept message's To and Cc as the mailbox has them now (Reply all; a draft being edited), and the Message-IDs it
+ * answers (In-Reply-To first, then References: an edited reply draft stays in its thread); read-only and checked
+ * again; null when it is gone.
+ */
+export async function recipientsICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<{ to: MailAddress[]; cc: MailAddress[]; answers: string[]; in_reply_to: string | null } | null> {
   const email = emailOf(accountKey);
   const a = account(hub, email);
   if (a.refused_at) throw new StoreError(409, REFUSED);
@@ -770,7 +774,8 @@ export async function recipientsICloud(hub: Hub, accountKey: string, ref: MoveRe
     const kept = await openKept(c, ref);
     if (!kept) return null;
     const env = kept.msg.envelope ?? {};
-    return { to: (env.to ?? []).slice(0, 50).map(mailAddress), cc: (env.cc ?? []).slice(0, 50).map(mailAddress) };
+    const withRefs = await c.fetchOne(kept.uid, { envelope: true, bodyStructure: true, internalDate: true, headers: ["references"] }, { uid: true });
+    return { to: (env.to ?? []).slice(0, 50).map(mailAddress), cc: (env.cc ?? []).slice(0, 50).map(mailAddress), answers: withRefs ? answers(withRefs) : [], in_reply_to: bareId(env.inReplyTo) };
   }).catch((e) => {
     if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
     throw e;
@@ -1015,8 +1020,8 @@ async function setFlagICloud(hub: Hub, accountKey: string, refs: MoveRef[], flag
 export interface ImapDrafter {
   append(path: string, content: Buffer, flags: ["\\Draft", "\\Seen"]): Promise<{ uid?: number } | false>;
 }
-/** A draft is at most this big (the text is capped at 50,000 characters; base64 and headers add to it). */
-export const DRAFT_BYTES = 400_000;
+/** A draft is at most this big: 50,000 characters of text and 15 MB of files, which base64 makes 20 MB (iCloud's limit). */
+export const DRAFT_BYTES = 22_000_000;
 
 /**
  * Save a draft (mail-compose.ts built it) to the folder iCloud marks `\Drafts`: the Mail screen's third write, and the

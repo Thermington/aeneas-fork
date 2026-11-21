@@ -57,7 +57,12 @@ export interface Draft {
   /** A reply: the Message-ID it answers, and the thread's (References). */
   in_reply_to?: string;
   references?: string[];
+  /** Files attached (checkedFiles, or a forwarded mail's own): parts after the text. */
+  files?: DraftFile[];
 }
+
+/** A file in a draft: its name (cleaned), its type (or application/octet-stream), its bytes. */
+export interface DraftFile { name: string; type: string; bytes: Buffer }
 
 /** The draft as an RFC 5322 message (CRLF line ends), with a new Message-ID at the sender's domain. */
 export function buildMessage(d: Draft, now = new Date()): { raw: Buffer; message_id: string } {
@@ -73,11 +78,51 @@ export function buildMessage(d: Draft, now = new Date()): { raw: Buffer; message
     ...(d.in_reply_to ? [`In-Reply-To: <${d.in_reply_to}>`] : []),
     ...(d.references?.length ? [`References: ${d.references.map((r) => `<${r}>`).join(" ")}`] : []),
     "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=utf-8",
-    "Content-Transfer-Encoding: base64",
   ];
-  const body = Buffer.from(d.text.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n")).toString("base64").replace(/.{76}/g, "$&\r\n");
+  const b64 = (b: Buffer) => b.toString("base64").replace(/.{76}/g, "$&\r\n");
+  const text = b64(Buffer.from(d.text.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n")));
+  if (!d.files?.length) {
+    headers.push("Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64");
+    return { raw: Buffer.from(`${headers.join("\r\n")}\r\n\r\n${text}\r\n`), message_id };
+  }
+  // With files: multipart/mixed, the text first, then each file as an attachment (its name in RFC 2231 form).
+  const boundary = `aeneas-${crypto.randomBytes(12).toString("hex")}`;
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  const parts = [`Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${text}`];
+  for (const f of d.files) {
+    const ascii = f.name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+    const star = `UTF-8''${encodeURIComponent(f.name)}`;
+    parts.push(`Content-Type: ${f.type}; name="${ascii}"\r\nContent-Disposition: attachment; filename="${ascii}"; filename*=${star}\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(f.bytes)}`);
+  }
+  const body = `${parts.map((p) => `--${boundary}\r\n${p}\r\n`).join("")}--${boundary}--`;
   return { raw: Buffer.from(`${headers.join("\r\n")}\r\n\r\n${body}\r\n`), message_id };
+}
+
+/** At most this many files in a draft, and this many bytes of them together (base64 makes a third more: under 20 MB). */
+export const FILES_MAX = 10;
+export const FILES_BYTES = 15 * 1024 * 1024;
+
+/** A file's name as a draft may carry it: one line, no folder in it, at most 120 characters. */
+export function fileName(v: unknown): string {
+  const s = (typeof v === "string" ? v : "").replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().replace(/^\.+/, "");
+  return (s || "attachment").slice(0, 120);
+}
+/** A file's type as a draft may carry it: `type/subtype` of plain characters, else application/octet-stream. */
+export const fileType = (v: unknown) => (typeof v === "string" && /^[a-z0-9.+-]{1,60}\/[a-z0-9.+-]{1,60}$/i.test(v) ? v.toLowerCase() : "application/octet-stream");
+
+/** Files from a request (`[{ name, type?, data: base64 }]`), checked: at most FILES_MAX and FILES_BYTES together. */
+export function checkedFiles(v: unknown): DraftFile[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > FILES_MAX) throw new StoreError(422, `files is a list of at most ${FILES_MAX}`);
+  let total = 0;
+  return v.map((f) => {
+    const o = (f && typeof f === "object" ? f : {}) as Record<string, unknown>;
+    if (typeof o.data !== "string" || !/^[A-Za-z0-9+/=\s]*$/.test(o.data)) throw new StoreError(422, "each file's data is base64");
+    const bytes = Buffer.from(o.data, "base64");
+    total += bytes.length;
+    if (total > FILES_BYTES) throw new StoreError(413, "The files are more than 15 MB together. Send big files from Apple Mail (Mail Drop).");
+    return { name: fileName(o.name), type: fileType(o.type), bytes };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

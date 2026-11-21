@@ -286,12 +286,17 @@ export function frameLink(href: string | null): string | null {
  * A draft to write (POST /mail/drafts): a reply (`reply_to`, a mail's id: the hub sets its recipient, subject and
  * thread) or a new mail (`to`, `subject`). `preview`: the hub says what it would save, and saves nothing.
  */
-export type MailDraftRequest = ({ reply_to: string; reply_all?: boolean } | { forward: string; to: string } | { to: string; subject: string }) & { text: string; greeting?: string; signoff?: string; preview?: boolean };
+export type MailDraftRequest = ({ reply_to: string; reply_all?: boolean } | { forward: string; to: string; forward_attachments?: boolean } | { to: string; subject: string; replaces?: string; from?: string }) & { text: string; greeting?: string; signoff?: string; preview?: boolean; files?: DraftFileIn[] };
+/** A file attached to a draft, as sent to the hub (base64). */
+export interface DraftFileIn { name: string; type: string; data: string }
+/** At most this many files, and this many bytes of them together (the hub's limits). */
+export const DRAFT_FILES_MAX = 10;
+export const DRAFT_FILES_BYTES = 15 * 1024 * 1024;
 /** A reply's greeting and sign-off as suggested (POST /mail/messages/:id/greeting): by the local model, or the plain ones. */
 /** `replies`: up to 3 short answers the local model suggests (none without it), each checked as plain words by the hub. */
 export interface MailGreeting { greeting: string; signoff: string; by: "model" | "plain"; replies?: string[] }
 /** What the hub saved to Drafts (or, for a preview, would save). */
-export interface MailDraft { saved: boolean; from: MailAddress; to: string[]; cc?: string[]; subject: string; text: string; in_reply_to?: string }
+export interface MailDraft { saved: boolean; from: MailAddress; to: string[]; cc?: string[]; subject: string; text: string; in_reply_to?: string; files?: { name: string; size: number }[] }
 /**
  * The mailbox's other folders (GET /mail `folders`), kept on the hub like the Inbox and read-only: `role` is the part
  * iCloud marks it for (`own`: one of the owner's), `name` its own name (shown for `own`).

@@ -1747,3 +1747,10 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 /* Smart replies: the model's suggested answers as buttons above the text; one tapped goes in the text box. */
 .mailx-smart { display: flex; flex-wrap: wrap; gap: 6px; }
 .mailx-smart-one { min-height: 0; padding: 5px 12px; border-radius: 16px; font-size: 13px; text-align: left; background: var(--surface); }
+/* Attaching files to a draft: a paperclip button holding a hidden file field; Include its attachments on a forward. */
+.mailx-attach { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; }
+.mailx-attach input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.mailx-attach:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mailx-attach .mailx-icon { width: 16px; height: 16px; }
+.mailx-check { display: inline-flex; align-items: center; gap: 6px; }
+.mailx-check input { width: auto; min-height: 0; }

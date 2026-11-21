@@ -193,7 +193,7 @@ export function createApp(hub: Hub): App {
   const small = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ error: "request body too large", detail: { max_bytes: MAX_BODY_BYTES } }, 413) });
   const upload = bodyLimit({ maxSize: MAX_UPLOAD_BYTES, onError: (c) => c.json({ error: "the file is over 25 MB", detail: { max_bytes: MAX_UPLOAD_BYTES } }, 413) });
   // An import upload streams to disk with its own limit (imports/bulk.ts); pasted text gets 25 MB.
-  app.use("*", (c, next) => c.req.path === "/imports/upload" ? next() : (c.req.path === "/images/library" || c.req.path === "/layouts/pictures" || c.req.path === "/imports/text" || c.req.path === "/music/hum" || c.req.path.startsWith("/ai/photos/") || c.req.path === "/connections/password-manager/keepass/import" ? upload : small)(c, next));
+  app.use("*", (c, next) => c.req.path === "/imports/upload" ? next() : (c.req.path === "/images/library" || c.req.path === "/layouts/pictures" || c.req.path === "/imports/text" || c.req.path === "/music/hum" || c.req.path === "/mail/drafts" || c.req.path.startsWith("/ai/photos/") || c.req.path === "/connections/password-manager/keepass/import" ? upload : small)(c, next));
 
   // The built web client, when present, is served at /app so any browser on the tailnet can use it.
   const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");

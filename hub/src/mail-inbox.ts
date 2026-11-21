@@ -19,7 +19,7 @@ import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MO
 import { fetchBytesViaTor, fetchPublicBytes, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
 import { textCards, type MailCard } from "./mail-cards.js";
-import { assembled, buildMessage, checkedLine, checkedNew, checkedText, DRAFT_TEXT_MAX, forwardQuote, forwardSubject, replyAllCc, GREETING_SYSTEM, greetingPrompt, plainGreeting, readSuggestion, replyFields } from "./mail-compose.js";
+import { assembled, buildMessage, checkedFiles, checkedLine, checkedNew, checkedText, DRAFT_TEXT_MAX, FILES_BYTES, FILES_MAX, forwardQuote, forwardSubject, replyAllCc, type DraftFile, GREETING_SYSTEM, greetingPrompt, plainGreeting, readSuggestion, replyFields } from "./mail-compose.js";
 import { withPriority } from "./ai/backends.js";
 
 /**
@@ -960,7 +960,7 @@ export async function setSeen(hub: Hub, key: string, seen: boolean): Promise<{ o
 }
 
 /** `text`: the whole text saved, the greeting and sign-off around the owner's own words. */
-export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; cc?: string[]; subject: string; text: string; in_reply_to?: string }
+export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; cc?: string[]; subject: string; text: string; in_reply_to?: string; files?: { name: string; size: number }[] }
 
 /**
  * Write mail as a draft (mail-compose.ts): a reply to a kept mail (`reply_to`, its id), or a new mail (`to`, `subject`,
@@ -1028,15 +1028,49 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
   if (!source?.saveDraft) throw new StoreError(409, "this mailbox cannot keep drafts from Aeneas");
   const name = hub.profile.get().name.trim();
   const from: MailAddress = { name: name && name !== "the owner" ? name : "", address: account.slice(account.indexOf(":") + 1) };
-  const out: DraftResult = { saved: false, from, to: fields.to, ...(fields.cc?.length ? { cc: fields.cc } : {}), subject: fields.subject, text, ...(fields.in_reply_to ? { in_reply_to: fields.in_reply_to } : {}) };
+  // Files: the owner's own (checked), and a forwarded mail's when asked (read from the mailbox now, read-only), 15 MB in all.
+  const files: DraftFile[] = checkedFiles(body.files);
+  if (body.forward !== undefined && body.forward_attachments === true && body.preview !== true) {
+    const r = keptRef(db, body.forward as string);
+    const src = r ? sourceOf(r.account) : null;
+    const list = r && src?.attachments ? (await src.attachments(hub, r.account, { id: r.id, message_id: r.message_id })) ?? [] : [];
+    let total = files.reduce((n, f) => n + f.bytes.length, 0);
+    for (const a of list.slice(0, FILES_MAX - files.length)) {
+      const f = await src!.attachment!(hub, r!.account, { id: r!.id, message_id: r!.message_id }, a.part);
+      if (!f) continue;
+      total += f.bytes.length;
+      if (total > FILES_BYTES) throw new StoreError(413, "The mail's attachments are more than 15 MB together. Forward it from Apple Mail (Mail Drop).");
+      files.push({ name: f.name, type: a.type, bytes: f.bytes });
+    }
+  }
+  // Editing a draft: the old one is moved to Trash once the new one is saved; its Cc and thread go on.
+  let replaces: { id: string; message_id: string | null } | null = null;
+  if (body.replaces !== undefined) {
+    if (typeof body.replaces !== "string") throw new StoreError(422, "replaces is a draft's id");
+    const d = db.prepare("SELECT m.account, m.id, m.message_id FROM folder_mail m JOIN folders f ON f.account = m.account AND f.path = m.folder WHERE m.key = ? AND f.role = 'drafts'").get(body.replaces) as { account: string; id: string; message_id: string | null } | undefined;
+    if (!d || d.account !== account) throw new StoreError(404, "that draft is not in Drafts any more");
+    const src = sourceOf(d.account);
+    const old = src?.recipients ? await src.recipients(hub, d.account, d) : null;
+    if (!old) throw new StoreError(404, "that draft is not in Drafts any more");
+    const mine = INBOX_SOURCES.flatMap((s) => s.accounts(hub)).map((a) => a.slice(a.indexOf(":") + 1));
+    const cc = replyAllCc(old.cc, [...mine, ...fields.to]);
+    fields = { ...fields, ...(cc.length ? { cc } : {}), ...(old.in_reply_to ? { in_reply_to: old.in_reply_to } : {}), ...(old.answers.length ? { references: old.answers.slice(-10) } : {}) };
+    replaces = d;
+  }
+  const out: DraftResult = { saved: false, from, to: fields.to, ...(fields.cc?.length ? { cc: fields.cc } : {}), subject: fields.subject, text, ...(fields.in_reply_to ? { in_reply_to: fields.in_reply_to } : {}), ...(files.length ? { files: files.map((f) => ({ name: f.name, size: f.bytes.length })) } : {}) };
   if (body.preview === true) return out;
-  const { raw } = buildMessage({ from, text, ...fields });
+  const { raw } = buildMessage({ from, text, ...fields, files });
   const label = mailboxLabel(hub, account);
   await exclusive(hub, () => source.saveDraft!(hub, account!, raw)).catch((e) => {
     console.error(`[mail-inbox] ${label}: draft not saved ${errCode(e)}`);
     throw e;
   });
-  console.log(`[mail-inbox] ${label}: 1 draft saved`);
+  console.log(`[mail-inbox] ${label}: 1 draft saved${files.length ? `, ${files.length} files` : ""}`);
+  // The old version of an edited draft: to Trash (MOVE, nothing erased), and out of the hub's Drafts at once.
+  if (replaces && source.moveTo) {
+    const moved = await exclusive(hub, () => source.moveTo!(hub, account!, [replaces!], { role: "trash" })).catch((e) => { console.error(`[mail-inbox] ${label}: old draft not moved ${errCode(e)}`); return null; });
+    if (moved?.get(replaces.id)) db.prepare("DELETE FROM folder_mail WHERE key = ?").run(body.replaces as string);
+  }
   return { ...out, saved: true };
 }
 
