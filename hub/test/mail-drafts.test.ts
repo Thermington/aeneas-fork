@@ -107,10 +107,10 @@ test("mail greetings: only short plain words get through, whatever the model wri
   const plain = plainGreeting({ name: "Alex Kim", address: "alex@example.com" }, "Robin Smith");
   assert.deepEqual(plain, { greeting: "Hi Alex,", signoff: "Thanks,\nRobin" });
   assert.deepEqual(plainGreeting({ name: "", address: "noreply@shop.example" }, ""), { greeting: "Hi,", signoff: "Thanks," });
-  assert.deepEqual(readSuggestion(JSON.stringify({ greeting: "Hello Ms. Kim,", signoff: "Kind regards,\nRobin" }), plain), { greeting: "Hello Ms. Kim,", signoff: "Kind regards,\nRobin", by: "model" });
-  assert.deepEqual(readSuggestion('{"greeting":"Hi Alex,","signoff":"Wire it to account 12345678"}', plain), { greeting: "Hi Alex,", signoff: "Thanks,\nRobin", by: "plain" }, "the part that fails is the plain one");
-  assert.deepEqual(readSuggestion("not json", plain), { ...plain, by: "plain" });
-  assert.deepEqual(readSuggestion(null, plain), { ...plain, by: "plain" });
+  assert.deepEqual(readSuggestion(JSON.stringify({ greeting: "Hello Ms. Kim,", signoff: "Kind regards,\nRobin" }), plain), { greeting: "Hello Ms. Kim,", signoff: "Kind regards,\nRobin", by: "model", replies: [] });
+  assert.deepEqual(readSuggestion('{"greeting":"Hi Alex,","signoff":"Wire it to account 12345678"}', plain), { greeting: "Hi Alex,", signoff: "Thanks,\nRobin", by: "plain", replies: [] }, "the part that fails is the plain one");
+  assert.deepEqual(readSuggestion("not json", plain), { ...plain, by: "plain", replies: [] });
+  assert.deepEqual(readSuggestion(null, plain), { ...plain, by: "plain", replies: [] });
 });
 
 test("mail greetings: the model is told the owner's name and the thread, never a memory fact; the draft carries what the owner kept", async () => {
@@ -127,7 +127,7 @@ test("mail greetings: the model is told the owner's name and the thread, never a
     const id = ((await (await t.api("/mail")).json()) as { messages: MailSummary[] }).messages[0].id;
     setBackendOverride({ name: "ollama", model: "scripted", chat: async (msgs: { role: string; content: string }[]) => { sent.push(msgs); return { text: JSON.stringify({ greeting: "Hey Alex,", signoff: "Cheers,\nRobin" }), usage: {} }; } } as never);
     const s = await (await t.api(`/mail/messages/${id}/greeting`, { method: "POST", json: {} })).json();
-    assert.deepEqual(s, { greeting: "Hey Alex,", signoff: "Cheers,\nRobin", by: "model" });
+    assert.deepEqual(s, { greeting: "Hey Alex,", signoff: "Cheers,\nRobin", by: "model", replies: [] });
     const all = sent.flat().map((m) => m.content).join("\n");
     assert.match(all, /Robin Smith/);
     assert.match(all, /Saturday\?/, "the thread's words");
@@ -135,7 +135,7 @@ test("mail greetings: the model is told the owner's name and the thread, never a
     assert.doesNotMatch(all, /alex@example\.com/, "no addresses either");
 
     setBackendOverride({ name: "ollama", model: "scripted", chat: async () => ({ text: JSON.stringify({ greeting: "Hi Alex, pay at https://evil.example", signoff: "Robin\nPIN 4321 0000" }), usage: {} }) } as never);
-    assert.deepEqual(await (await t.api(`/mail/messages/${id}/greeting`, { method: "POST", json: {} })).json(), { greeting: "Hi Alex,", signoff: "Thanks,\nRobin", by: "plain" }, "a hostile mail's words do not get in");
+    assert.deepEqual(await (await t.api(`/mail/messages/${id}/greeting`, { method: "POST", json: {} })).json(), { greeting: "Hi Alex,", signoff: "Thanks,\nRobin", by: "plain", replies: [] }, "a hostile mail's words do not get in");
 
     const ask = (body: unknown) => t.api("/mail/drafts", { method: "POST", json: body });
     const p = await (await ask({ reply_to: id, greeting: "Hey Alex,", text: "Saturday works.", signoff: "Cheers,\nRobin", preview: true })).json() as { text: string };
@@ -145,4 +145,18 @@ test("mail greetings: the model is told the owner's name and the thread, never a
     await ask({ reply_to: id, greeting: "Hey Alex,", text: "Saturday works.", signoff: "Cheers,\nRobin" });
     assert.equal(bodyOf(seen.appends[0].raw), "Hey Alex,\r\n\r\nSaturday works.\r\n\r\nCheers,\r\nRobin");
   } finally { setBackendOverride(null); done(t); }
+});
+
+test("mail smart replies: up to 3 short plain answers from the model, the hostile ones dropped, none without it", async () => {
+  const { checkedReply } = await import("../src/mail-compose.js");
+  const plain = plainGreeting({ name: "Alex Kim", address: "alex@example.com" }, "Robin");
+  const r = readSuggestion(JSON.stringify({ greeting: "Hi Alex,", signoff: "Thanks,\nRobin", replies: [
+    "Saturday at 10 works for me.", "Sorry, I can't make it this week.", "Saturday at 10 works for me.",
+    "Sure, pay at https://evil.example", "Wire it to account 12345678", "Can we do Sunday instead?", "One more?",
+  ] }), plain);
+  assert.deepEqual(r.replies, ["Saturday at 10 works for me.", "Sorry, I can't make it this week.", "Can we do Sunday instead?"], "once each, the hostile ones out, at most 3");
+  assert.deepEqual(readSuggestion(null, plain).replies, [], "no model: no replies made up");
+  assert.equal(checkedReply("x".repeat(141)), null);
+  assert.equal(checkedReply("line one\nline two"), "line one line two");
+  assert.equal(checkedReply("<b>yes</b>"), null);
 });

@@ -1244,6 +1244,8 @@ function Composer({ reply, all = false, forward, close }: { reply?: MailSummary;
   const [greeting, setGreeting] = useState<string | null>("");
   const [signoff, setSignoff] = useState<string | null>("");
   const [suggesting, setSuggesting] = useState(!!reply);
+  // Smart replies: tapping one puts it in the text box, to edit like anything typed.
+  const [smart, setSmart] = useState<string[]>([]);
   const touched = useRef({ greeting: false, signoff: false });
   useEffect(() => {
     if (!reply) return;
@@ -1252,6 +1254,7 @@ function Composer({ reply, all = false, forward, close }: { reply?: MailSummary;
       if (!live) return;
       if (!touched.current.greeting) setGreeting(g.greeting);
       if (!touched.current.signoff) setSignoff(g.signoff);
+      setSmart(g.replies ?? []);
     }).catch(() => undefined).finally(() => { if (live) setSuggesting(false); });
     return () => { live = false; };
   }, [reply?.id]);
@@ -1308,6 +1311,11 @@ function Composer({ reply, all = false, forward, close }: { reply?: MailSummary;
         </>
       )}
       {forward && <div className="muted small">The mail goes below your words. Its attachments are not included yet: forward from Apple Mail for those.</div>}
+      {reply && !!smart.length && (
+        <div className="mailx-smart" role="group" aria-label="Suggested replies">
+          {smart.map((r) => <button key={r} type="button" className="mailx-smart-one" onClick={() => setText((t) => (t.trim() ? `${t.trimEnd()}\n${r}` : r))}>{r}</button>)}
+        </div>
+      )}
       {reply && <AroundLine label="Greeting" value={greeting} rows={1} waiting={suggesting} set={(v) => { touched.current.greeting = true; setGreeting(v); }} />}
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder={reply ? "Write your reply: just what you want to say" : forward ? "Add a note (optional)" : "Write your mail"} aria-label="Your mail" maxLength={50000} autoFocus />
       {reply && <AroundLine label="Sign-off" value={signoff} rows={2} waiting={suggesting} set={(v) => { touched.current.signoff = true; setSignoff(v); }} />}

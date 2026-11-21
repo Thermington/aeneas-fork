@@ -289,6 +289,8 @@ Drafts only. Nothing is sent from Aeneas: a draft goes to iCloud's Drafts, and t
 - **Greeting and sign-off** (replies): when the reply opens, ask for them (`POST /mail/messages/:id/greeting`) and show
   each as an editable field above and below the text, with **Remove**. Never replace what the owner already typed in
   one. The hub checks both again: at most 2 lines of 60 characters, no links, addresses, long numbers or markup.
+- **Smart replies** (next PR): the greeting call's `replies`, shown as buttons above the text; one tapped goes into the
+  text box (after what is typed), to edit like anything typed.
 - **Preview** (`preview: true`) shows the whole mail the hub would save: From, To, Subject, and the full text
   (greeting, the owner's text exactly as typed, sign-off). Show the text as plain text. Then **Save to Drafts**,
   **Edit** or **Discard**.

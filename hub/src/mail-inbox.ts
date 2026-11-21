@@ -1046,7 +1046,7 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
  * memory facts, no records. What it writes is checked (checkedLine); without the model, or for what fails the check,
  * the plain ones ("Hi Alex," and "Thanks, Robin"). The owner sees both in the reply, and edits or drops them.
  */
-export async function suggestGreeting(hub: Hub, key: string): Promise<{ greeting: string; signoff: string; by: "model" | "plain" }> {
+export async function suggestGreeting(hub: Hub, key: string): Promise<{ greeting: string; signoff: string; by: "model" | "plain"; replies: string[] }> {
   const db = hub.mailDb;
   const r = db.prepare("SELECT from_name, from_address, thread, mine FROM inbox WHERE key = ?").get(key) as { from_name: string; from_address: string; thread: string | null; mine: number } | undefined;
   if (!r) throw new StoreError(404, "that message is not kept (it left the Inbox)");

@@ -288,7 +288,8 @@ export function frameLink(href: string | null): string | null {
  */
 export type MailDraftRequest = ({ reply_to: string; reply_all?: boolean } | { forward: string; to: string } | { to: string; subject: string }) & { text: string; greeting?: string; signoff?: string; preview?: boolean };
 /** A reply's greeting and sign-off as suggested (POST /mail/messages/:id/greeting): by the local model, or the plain ones. */
-export interface MailGreeting { greeting: string; signoff: string; by: "model" | "plain" }
+/** `replies`: up to 3 short answers the local model suggests (none without it), each checked as plain words by the hub. */
+export interface MailGreeting { greeting: string; signoff: string; by: "model" | "plain"; replies?: string[] }
 /** What the hub saved to Drafts (or, for a preview, would save). */
 export interface MailDraft { saved: boolean; from: MailAddress; to: string[]; cc?: string[]; subject: string; text: string; in_reply_to?: string }
 /**

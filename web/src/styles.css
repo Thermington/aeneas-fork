@@ -1744,3 +1744,6 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-att-list li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--mail-item); }
 .mailx-att-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mailx-att-list .mailx-icon { width: 16px; height: 16px; color: var(--muted); }
+/* Smart replies: the model's suggested answers as buttons above the text; one tapped goes in the text box. */
+.mailx-smart { display: flex; flex-wrap: wrap; gap: 6px; }
+.mailx-smart-one { min-height: 0; padding: 5px 12px; border-radius: 16px; font-size: 13px; text-align: left; background: var(--surface); }
