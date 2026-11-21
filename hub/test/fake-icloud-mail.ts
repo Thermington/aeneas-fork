@@ -28,6 +28,8 @@ export interface Msg {
   seen?: boolean;
   /** Flagged (Apple Mail's flag; a pin on the Mail screen). */
   flagged?: boolean;
+  /** Attachments (only with `plain`): parts 2, 3, … after the text; `inlineId` makes one a picture shown inside the mail. */
+  files?: { name: string; type: string; bytes: Buffer; inlineId?: string }[];
 }
 
 export const FOLDERS: ImapFolder[] = [
@@ -42,7 +44,7 @@ export const FOLDERS: ImapFolder[] = [
 
 /** A fake iCloud for the Mail screen: folders, messages, and a record of every call and query. */
 export function fake(messages: Msg[], opts: { password?: string; noMove?: boolean } = {}) {
-  const seen = { connects: 0, logouts: 0, calls: [] as string[], opened: [] as { path: string; readOnly: unknown }[], fetches: [] as unknown[], searches: [] as Record<string, unknown>[], moves: [] as { from: string; uid: number; to: string }[], flags: [] as { uid: number; flags: string[]; add: boolean }[], appends: [] as { path: string; raw: string; flags: string[] }[] };
+  const seen = { connects: 0, logouts: 0, calls: [] as string[], opened: [] as { path: string; readOnly: unknown }[], fetches: [] as unknown[], searches: [] as Record<string, unknown>[], moves: [] as { from: string; uid: number; to: string }[], flags: [] as { uid: number; flags: string[]; add: boolean }[], appends: [] as { path: string; raw: string; flags: string[] }[], downloads: [] as string[] };
   setImapFactory((login) => {
     let open: string | null = null;
     const find = (uid: string) => messages.find((m) => m.folder === open && String(m.uid) === uid);
@@ -70,10 +72,15 @@ export function fake(messages: Msg[], opts: { password?: string; noMove?: boolea
         const m = find(uid);
         if (!m) return false;
         const parts = [m.plain !== undefined ? { type: "text/plain" } : null, m.html !== undefined ? { type: "text/html" } : null].filter(Boolean) as { type: string }[];
+        // With files: the text as part 1, each file a part after it, as a server lists a multipart/mixed message.
+        const files = (m.files ?? []).map((f, i) => ({
+          part: String(i + 2), type: f.type, size: Math.ceil(f.bytes.length / 3) * 4, encoding: "base64",
+          ...(f.inlineId ? { id: `<${f.inlineId}>`, disposition: "inline" } : { disposition: "attachment", dispositionParameters: { filename: f.name } }),
+        }));
         return {
           internalDate: m.at,
           envelope: { date: m.at, subject: m.subject, messageId: m.messageId && `<${m.messageId}>`, inReplyTo: m.inReplyTo && `<${m.inReplyTo}>`, from: [m.from], replyTo: [m.replyTo ?? m.from], to: m.to ?? [{ name: "Robin", address: EMAIL }], cc: m.cc ?? [] },
-          bodyStructure: parts.length === 1 ? parts[0] : { type: "multipart/alternative", childNodes: parts.map((p, i) => ({ ...p, part: String(i + 1) })) },
+          bodyStructure: files.length ? { type: "multipart/mixed", childNodes: [{ ...parts[0], part: "1" }, ...files] } : parts.length === 1 ? parts[0] : { type: "multipart/alternative", childNodes: parts.map((p, i) => ({ ...p, part: String(i + 1) })) },
           ...(query.headers ? { headers: Buffer.from(`${m.references ? `References: ${m.references}\r\n` : ""}${m.headers ?? ""}\r\n`) } : {}),
         };
       },
@@ -111,6 +118,11 @@ export function fake(messages: Msg[], opts: { password?: string; noMove?: boolea
       async download(uid, part) {
         seen.calls.push("download");
         const m = find(uid)!;
+        if (m.files?.length && part !== "1") {
+          const f = m.files[Number(part) - 2];
+          seen.downloads.push(part);
+          return { content: Readable.from([f ? f.bytes : Buffer.alloc(0)]) };
+        }
         const both = m.plain !== undefined && m.html !== undefined;
         const body = both ? (part === "1" ? m.plain! : m.html!) : (m.plain ?? m.html ?? "");
         return { content: Readable.from([Buffer.from(body, "utf8")]) };

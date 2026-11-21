@@ -4,7 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import type { Hub } from "./hub.js";
-import { icloudInbox, INBOX_DAYS, type FolderListing, type FolderRole } from "./imports/icloud.js";
+import { icloudInbox, INBOX_DAYS, type FolderListing, type FolderRole, type MailAttachment } from "./imports/icloud.js";
 import type { InboxMail, InboxSource, MailAddress } from "./imports/inbox-source.js";
 
 /** Where the Mail screen's mail comes from (imports/inbox-source.ts): iCloud today; a Gmail source is one more entry. */
@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS folder_mail (
   automated INTEGER NOT NULL,
   html TEXT,
   seen INTEGER NOT NULL DEFAULT 0,
+  attachments TEXT,
   PRIMARY KEY (account, id)
 );
 CREATE INDEX IF NOT EXISTS folder_mail_at ON folder_mail(account, folder, at);
@@ -126,6 +127,9 @@ export function openMailDb(dbPath: string): DB {
   if (!(db.prepare("PRAGMA table_info(mailboxes)").all() as { name: string }[]).some((c) => c.name === "sent_at")) db.exec("ALTER TABLE mailboxes ADD COLUMN sent_at TEXT");
   // Cards: mail kept before them has none stored (NULL), and gets the ones its text shows when listed.
   if (!inboxCols.includes("cards")) db.exec("ALTER TABLE inbox ADD COLUMN cards TEXT");
+  // Attachments (since 2026-11-21): mail kept before has none listed (NULL) until it is opened.
+  if (!inboxCols.includes("attachments")) db.exec("ALTER TABLE inbox ADD COLUMN attachments TEXT");
+  if (!(db.prepare("PRAGMA table_info(folder_mail)").all() as { name: string }[]).some((c) => c.name === "attachments")) db.exec("ALTER TABLE folder_mail ADD COLUMN attachments TEXT");
   return db;
 }
 
@@ -157,8 +161,8 @@ const folderOf = (id: string) => /^\d+:\d+:([\s\S]+)$/.exec(id)?.[1] ?? "";
  *    it goes. Done mail is in Archive and stays (for its kept time). Nothing goes when the listing found no Inbox.
  */
 export function keepInbox(db: DB, account: string, found: { present: string[] | null; seen?: string[] | null; flagged?: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; refs?: { id: string; refs: string[] }[] }): { kept: number; gone: number; woken: string[]; fresh: string[] } {
-  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen, cards)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen, cards, attachments)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const setRefs = db.prepare("UPDATE inbox SET refs = ? WHERE account = ? AND id = ?");
   const fresh: string[] = [];
   // A brand's logo, fetched later (fetchMailImages); a new address for it is fetched again.
@@ -180,7 +184,7 @@ export function keepInbox(db: DB, account: string, found: { present: string[] | 
     for (const m of found.mails) {
       const added = insert.run(account, m.id, mailKey(account, m.id), m.message_id, m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
         m.subject, m.text, m.automated ? 1 : 0, m.unsubscribe ? 1 : 0, m.list_id, m.html, m.html && m.remote.length ? JSON.stringify(m.remote) : null, m.logo?.domain ?? null,
-        JSON.stringify(m.refs ?? []), m.mine ? 1 : 0, m.mine ? "sent" : "inbox", m.mine ? 1 : 0, JSON.stringify(m.mine ? [] : m.cards ?? [])).changes;
+        JSON.stringify(m.refs ?? []), m.mine ? 1 : 0, m.mine ? "sent" : "inbox", m.mine ? 1 : 0, JSON.stringify(m.mine ? [] : m.cards ?? []), m.attachments ? JSON.stringify(m.attachments) : null).changes;
       if (added && !m.mine) { kept++; fresh.push(mailKey(account, m.id)); }
       if (m.logo) logo.run(m.logo.domain, m.logo.url);
     }
@@ -341,6 +345,8 @@ export interface MailSummary {
   thread?: string;
   /** The owner's own reply (state `sent`). */
   mine?: boolean;
+  /** How many attachments it has (the row's paperclip), absent when none, null when not known yet (kept before 2026-11-21: clients ask once, on opening it). */
+  attachments?: number | null;
   /** Its key facts (mail-cards.ts): a package, a flight, a bill; absent when it has none. */
   cards?: MailCard[];
 }
@@ -355,7 +361,7 @@ export interface MailMessage extends MailSummary {
   quote_at?: number;
 }
 
-type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number; cards?: string | null };
+type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number; cards?: string | null; attachments?: string | null };
 
 /**
  * A message's cards: those stored at refresh (from the sender's data, or its text); for mail kept before cards (NULL),
@@ -380,6 +386,9 @@ export const previewOf = (text: string) => ownWords(text.slice(0, PREVIEW_READ))
   .replace(/(https?:\/\/|www\.)[^\s)]+/gi, "")
   .replace(/\s+/g, " ").replace(/\s+([.,;:!?])/g, "$1").trim().slice(0, 200);
 
+/** How many attachments a kept list holds (0 when none or not known). */
+const attachmentCount = (s: string | null | undefined): number => { try { return s ? (JSON.parse(s) as unknown[]).length : 0; } catch { return 0; } };
+
 function summary(r: Row): MailSummary {
   const s: MailSummary = {
     id: r.key, at: r.at, from: { name: r.from_name, address: r.from_address },
@@ -391,6 +400,7 @@ function summary(r: Row): MailSummary {
     seen: !!r.seen,
     ...(r.thread ? { thread: r.thread } : {}),
     ...(r.mine ? { mine: true } : {}),
+    ...(r.attachments == null ? { attachments: null } : attachmentCount(r.attachments) ? { attachments: attachmentCount(r.attachments) } : {}),
   };
   const cards = cardsOf(r);
   return cards.length ? { ...s, cards } : s;
@@ -404,7 +414,7 @@ export const LIST_MAX = 5000;
  * the screen sorts it into Inbox, Snoozed, Done and the bundles.
  */
 export function listMail(db: DB, ctx: BundleContext = NO_MODULES): MailSummary[] {
-  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
+  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
   return rows.map((r) => ({
     ...summary(r),
     bundle: bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx),
@@ -770,10 +780,10 @@ export async function moveMail(hub: Hub, keys: string[], to: string, now = new D
         const into = dest ? dest.path : to === "inbox" ? null : (db.prepare("SELECT path FROM folders WHERE account = ? AND role = ?").get(account, to) as { path: string } | undefined)?.path ?? null;
         finishSnoozeTasks(hub, mine.filter((r) => r.table === "inbox" && ids.get(r.id)).map((r) => r.key), now);
         db.transaction(() => {
-          const copyInbox = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen)
-            SELECT account, ?, ?, ?, message_id, at, from_name, from_address, '[]', reply_to, subject, text, automated, html, seen FROM inbox WHERE key = ?`);
-          const copyFolder = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen)
-            SELECT account, ?, ?, ?, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen FROM folder_mail WHERE key = ?`);
+          const copyInbox = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen, attachments)
+            SELECT account, ?, ?, ?, message_id, at, from_name, from_address, '[]', reply_to, subject, text, automated, html, seen, attachments FROM inbox WHERE key = ?`);
+          const copyFolder = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen, attachments)
+            SELECT account, ?, ?, ?, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen, attachments FROM folder_mail WHERE key = ?`);
           for (const r of mine) {
             const id = ids.get(r.id);
             if (!id) { failed++; continue; }
@@ -890,6 +900,42 @@ export async function setPinnedSynced(hub: Hub, key: string, pinned: boolean): P
     }).catch((e) => console.error(`[mail-inbox] ${mailboxLabel(hub, account)}: pin ${errCode(e)}`));
   }
   return { ok: true, synced };
+}
+
+/** A kept mail by its key, in the Inbox's table or a folder's: its mailbox, its folder id and Message-ID. */
+function keptRef(db: DB, key: string): { account: string; id: string; message_id: string | null } | null {
+  return (db.prepare("SELECT account, id, message_id FROM inbox WHERE key = ?").get(key) as { account: string; id: string; message_id: string | null } | undefined)
+    ?? (db.prepare("SELECT account, id, message_id FROM folder_mail WHERE key = ?").get(key) as { account: string; id: string; message_id: string | null } | undefined)
+    ?? null;
+}
+
+/**
+ * A kept mail's attachments now (since 2026-11-21), with its pictures' previews: read from the mailbox when the owner
+ * opens the mail (read-only, the message checked again), kept in memory only; the list (no previews) is kept with the
+ * mail for its paperclip. Null when the mail is not kept, or not in the mailbox any more.
+ */
+export async function mailAttachments(hub: Hub, key: string): Promise<(MailAttachment & { preview?: string })[] | null> {
+  const r = keptRef(hub.mailDb, key);
+  const source = r ? sourceOf(r.account) : null;
+  if (!r || !source?.attachments) return null;
+  const list = await source.attachments(hub, r.account, { id: r.id, message_id: r.message_id });
+  if (list) {
+    const plain = JSON.stringify(list.map(({ part, name, type, size }) => ({ part, name, type, size })));
+    hub.mailDb.prepare("UPDATE inbox SET attachments = ? WHERE key = ?").run(plain, key);
+    hub.mailDb.prepare("UPDATE folder_mail SET attachments = ? WHERE key = ?").run(plain, key);
+  }
+  return list;
+}
+
+/** One attachment's bytes for a download the owner asked for (read-only, never kept); null when it is not there. */
+export async function mailAttachment(hub: Hub, key: string, part: string): Promise<{ name: string; bytes: Buffer } | null> {
+  if (!/^\d{1,3}(\.\d{1,3}){0,9}$/.test(part)) return null;
+  const r = keptRef(hub.mailDb, key);
+  const source = r ? sourceOf(r.account) : null;
+  if (!r || !source?.attachment) return null;
+  const file = await source.attachment(hub, r.account, { id: r.id, message_id: r.message_id }, part);
+  if (file) console.log(`[mail-inbox] ${mailboxLabel(hub, r.account)}: 1 attachment downloaded`);
+  return file;
 }
 
 /**
@@ -1047,8 +1093,8 @@ export function keepFolders(db: DB, account: string, listings: FolderListing[]):
       db.prepare("DELETE FROM folders WHERE account = ? AND path = ?").run(account, r.path);
     }
     const saveFolder = db.prepare("INSERT INTO folders (account, path, key, role, more) VALUES (?, ?, ?, ?, ?) ON CONFLICT(account, path) DO UPDATE SET role = excluded.role, more = excluded.more");
-    const insert = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insert = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen, attachments)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const mark = db.prepare("UPDATE folder_mail SET seen = ? WHERE account = ? AND id = ? AND seen != ?");
     const del = db.prepare("DELETE FROM folder_mail WHERE account = ? AND id = ?");
     for (const l of listings) {
@@ -1056,7 +1102,7 @@ export function keepFolders(db: DB, account: string, listings: FolderListing[]):
       const read = new Set(l.seen);
       for (const m of l.mails) {
         kept += insert.run(account, m.id, mailKey(account, m.id), l.path, m.message_id, m.at.toISOString(), m.from.name, m.from.address, JSON.stringify(m.to),
-          m.reply_to, m.subject, m.text, m.automated ? 1 : 0, m.html, read.has(m.id) ? 1 : 0).changes;
+          m.reply_to, m.subject, m.text, m.automated ? 1 : 0, m.html, read.has(m.id) ? 1 : 0, m.attachments ? JSON.stringify(m.attachments) : null).changes;
       }
       for (const id of l.present) { const v = read.has(id) ? 1 : 0; mark.run(v, account, id, v); }
       const here = new Set(l.present);
@@ -1082,7 +1128,7 @@ export function mailFolders(db: DB): MailFolder[] {
     .sort((a, b) => (ROLE_ORDER[a.role] ?? 9) - (ROLE_ORDER[b.role] ?? 9) || a.name.localeCompare(b.name) || a.email.localeCompare(b.email));
 }
 
-type FolderRow = { key: string; at: string; from_name: string; from_address: string; to_list: string; reply_to: string | null; subject: string; text: string; automated: number; seen: number; role: FolderRole };
+type FolderRow = { key: string; at: string; from_name: string; from_address: string; to_list: string; reply_to: string | null; subject: string; text: string; automated: number; seen: number; role: FolderRole; attachments?: string | null };
 const toList = (s: string): MailAddress[] => { try { return (JSON.parse(s) as MailAddress[]).filter((a) => a && typeof a.address === "string"); } catch { return []; } };
 export type FolderMailSummary = MailSummary & { to: MailAddress[]; folder_role: FolderRole };
 function folderSummary(r: FolderRow): FolderMailSummary {
@@ -1090,6 +1136,7 @@ function folderSummary(r: FolderRow): FolderMailSummary {
     id: r.key, at: r.at, from: { name: r.from_name, address: r.from_address }, ...(r.reply_to ? { reply_to: r.reply_to } : {}),
     to: toList(r.to_list), subject: r.subject, preview: previewOf(r.text), automated: !!r.automated, bundle: null, state: "folder", pinned: false, seen: !!r.seen,
     folder_role: r.role, ...(r.role === "sent" || r.role === "drafts" ? { mine: true } : {}),
+    ...(r.attachments == null ? { attachments: null } : attachmentCount(r.attachments) ? { attachments: attachmentCount(r.attachments) } : {}),
   };
 }
 
@@ -1097,7 +1144,7 @@ function folderSummary(r: FolderRow): FolderMailSummary {
 export function folderMail(db: DB, key: string): FolderMailSummary[] | null {
   const f = db.prepare("SELECT account, path, role FROM folders WHERE key = ?").get(key) as { account: string; path: string; role: FolderRole } | undefined;
   if (!f) return null;
-  const rows = db.prepare("SELECT key, at, from_name, from_address, to_list, reply_to, subject, substr(text, 1, 3000) AS text, automated, seen FROM folder_mail WHERE account = ? AND folder = ? ORDER BY at DESC, key").all(f.account, f.path) as Omit<FolderRow, "role">[];
+  const rows = db.prepare("SELECT key, at, from_name, from_address, to_list, reply_to, subject, substr(text, 1, 3000) AS text, automated, seen, attachments FROM folder_mail WHERE account = ? AND folder = ? ORDER BY at DESC, key").all(f.account, f.path) as Omit<FolderRow, "role">[];
   return rows.map((r) => folderSummary({ ...r, role: f.role }));
 }
 

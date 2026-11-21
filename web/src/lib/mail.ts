@@ -18,6 +18,8 @@ export interface MailSummary {
   seen?: boolean;
   /** Its thread: messages with the same one show as one row. */
   thread?: string;
+  /** How many attachments (the row's paperclip): absent when none, null when not known yet (ask once, on opening). */
+  attachments?: number | null;
   /** The owner's own reply (from Sent). */
   mine?: boolean;
   /** Its key facts (a package, a flight, a bill), from the sender's own data or its text. */
@@ -190,6 +192,7 @@ export function threadRows(messages: MailSummary[]): MailThread[] {
       preview: last.mine ? `You: ${last.preview}` : last.preview,
       at: last.at > base.at ? last.at : base.at,
       pinned: received.some((m) => m.pinned),
+      ...(members.some((m) => m.attachments === null) ? { attachments: null } : members.some((m) => m.attachments) ? { attachments: members.reduce((n, m) => n + (m.attachments ?? 0), 0) } : { attachments: undefined }),
       seen: received.every((m) => m.seen !== false),
       automated: !person,
       bundle: person ? null : base.bundle,
@@ -437,6 +440,28 @@ export function initials(from: MailAddress): string {
 }
 
 /** A verified brand logo as the hub sends it (a data: SVG, shown only as a picture), or null for anything else. */
+/** One attachment of an open mail (GET /mail/messages/:id/attachments): `preview` for a picture, from the hub. */
+export interface MailAttachment { part: string; name: string; type: string; size: number; preview?: string }
+
+/** A picture preview as the hub sends it (a data: JPEG, PNG, GIF or WebP, shown only as a picture), or null. */
+export function previewSrc(v: string | undefined): string | null {
+  return v && v.length < 7_000_000 && /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(v) ? v : null;
+}
+
+/**
+ * Files that can run code when opened: programs, scripts, shortcuts, disk images, and Office files that can hold
+ * macros. The screen asks before downloading one.
+ */
+const RISKY = /\.(exe|msi|msix|appx|bat|cmd|com|scr|pif|cpl|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|jar|lnk|url|reg|dll|sys|iso|img|vhd|vhdx|dmg|pkg|app|command|sh|apk|xlsm|xlsb|xltm|docm|dotm|pptm|potm|ppsm|sldm|one|chm)$/i;
+export const riskyFile = (name: string) => RISKY.test(name.trim());
+
+/** A size as people read it: 820 KB, 2.4 MB. */
+export function fileSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
 export function logoSrc(v: string | undefined): string | null {
   return v && v.length < 200_000 && /^data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+$/.test(v) ? v : null;
 }

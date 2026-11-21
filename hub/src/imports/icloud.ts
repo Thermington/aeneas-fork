@@ -77,7 +77,7 @@ const SEARCH_ID = JSON.stringify({ subject: SUBJECT_WORDS, body: BODY_WORDS });
 // changes a mailbox is in it. Tests swap in a fake with setImapFactory.
 
 export interface ImapFolder { path: string; specialUse?: string; flags: Set<string> }
-export interface ImapPart { part?: string; type: string; id?: string; size?: number; disposition?: string; dispositionParameters?: Record<string, string>; parameters?: Record<string, string>; childNodes?: ImapPart[] }
+export interface ImapPart { part?: string; type: string; id?: string; size?: number; encoding?: string; disposition?: string; dispositionParameters?: Record<string, string>; parameters?: Record<string, string>; childNodes?: ImapPart[] }
 export interface ImapAddress { name?: string; address?: string }
 export interface ImapMessage {
   internalDate?: Date | string;
@@ -591,6 +591,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
         const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html));
         // Cards from the raw HTML: cleaning takes out the sender's schema.org data (a script) with every other script.
         m.cards = mailCards(html.join("\n"), m.subject, m.text, m.from, m.automated);
+        m.attachments = attachmentParts(msg.bodyStructure);
         mails.push(m);
       }
       // Mail kept before threads: the Message-IDs it answers, headers only (at most REFS_MAX a refresh).
@@ -672,6 +673,119 @@ export async function originalICloud(hub: Hub, accountKey: string, id: string): 
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Attachments (since 2026-11-21): listed from the message's structure, read only when the owner opens or asks for one
+
+/** One attachment as the Mail screen lists it: the part's number in the message, its name, its type, its size in bytes. */
+export interface MailAttachment { part: string; name: string; type: string; size: number }
+/** At most this many listed; a preview at most PREVIEW_BYTES (PREVIEWS_MAX a mail); a download at most FILE_BYTES. */
+export const ATTACH_MAX = 30;
+export const PREVIEW_BYTES = 5_000_000;
+export const PREVIEWS_MAX = 10;
+export const FILE_BYTES = 25_000_000;
+
+/** A file name as the screen may show it and a browser may save it: one line, no folder in it, at most 120 characters. */
+export function attachmentName(v: string | undefined, part: string): string {
+  const s = (v ?? "").replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().replace(/^\.+/, "");
+  return (s || `attachment-${part}`).slice(0, 120);
+}
+
+/**
+ * A message's attachments, from its structure alone (nothing downloaded): every leaf part that is marked as an
+ * attachment or has a file name, or is not text; never its text parts, and never a picture shown inside the mail (an
+ * image with a Content-ID that is not marked as an attachment). The size is the part's own (base64 is a third bigger
+ * than the file).
+ */
+export function attachmentParts(node: ImapPart | undefined): MailAttachment[] {
+  const out: MailAttachment[] = [];
+  const walk = (n: ImapPart | undefined) => {
+    if (!n || out.length >= ATTACH_MAX) return;
+    if (n.childNodes?.length) { for (const c of n.childNodes) walk(c); return; }
+    const type = (n.type ?? "").toLowerCase();
+    const disposition = (n.disposition ?? "").toLowerCase();
+    const named = n.dispositionParameters?.filename ?? n.parameters?.name;
+    const isText = type === "text/plain" || type === "text/html";
+    if (disposition !== "attachment" && (isText && !named)) return;
+    if (disposition !== "attachment" && type.startsWith("image/") && n.id) return;
+    if (!named && disposition !== "attachment" && (isText || type.startsWith("multipart/"))) return;
+    const part = n.part ?? "1";
+    const size = Math.max(0, Math.round((n.size ?? 0) * ((n.encoding ?? "").toLowerCase() === "base64" ? 0.75 : 1)));
+    out.push({ part, name: attachmentName(named, part), type: /^[a-z0-9.+-]{1,60}\/[a-z0-9.+-]{1,60}$/.test(type) ? type : "application/octet-stream", size });
+  };
+  walk(node);
+  return out;
+}
+
+/**
+ * A kept message, opened read-only (EXAMINE) in its folder for reading its attachments: the folder must be one iCloud
+ * lists (the Inbox, Archive or a shown folder), not reset since (UIDVALIDITY), and the message still the one the hub
+ * kept (its Message-ID read again). Null when it is not.
+ */
+async function openKept(c: ImapClient, ref: MoveRef): Promise<{ uid: string; msg: ImapMessage } | null> {
+  const at = parseId(ref.id);
+  if (!at || !ref.message_id) return null;
+  const folders = await c.list();
+  const allowed = new Set([inboxFolder(folders)?.path, folders.find((f) => f.specialUse === "\\Archive")?.path, ...shownFolders(folders).map((f) => f.path)].filter(Boolean));
+  if (!allowed.has(at.folder)) return null;
+  const box = await c.mailboxOpen(at.folder, { readOnly: true });
+  if (String(box.uidValidity) !== at.validity) return null;
+  const msg = await c.fetchOne(at.uid, { envelope: true, bodyStructure: true, internalDate: true }, { uid: true });
+  if (!msg || bareId(msg.envelope?.messageId) !== ref.message_id) return null;
+  return { uid: at.uid, msg };
+}
+
+/**
+ * A kept message's attachments now, with a preview of each picture (JPEG, PNG, GIF or WebP, at most PREVIEW_BYTES,
+ * PREVIEWS_MAX of them; its bytes must be a picture, whatever the mail calls it): read with BODY.PEEK, kept in memory
+ * only. Null when the message is not there any more.
+ */
+export async function attachmentsICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<(MailAttachment & { preview?: string })[] | null> {
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    const kept = await openKept(c, ref);
+    if (!kept) return null;
+    const list: (MailAttachment & { preview?: string })[] = attachmentParts(kept.msg.bodyStructure);
+    let previews = 0;
+    for (const x of list) {
+      if (previews >= PREVIEWS_MAX || !/^image\/(jpeg|png|gif|webp)$/.test(x.type) || x.size > PREVIEW_BYTES) continue;
+      const d = await c.download(kept.uid, x.part, { uid: true, maxBytes: PREVIEW_BYTES });
+      const bytes = await readBytes(d?.content, PREVIEW_BYTES);
+      const data = bytes && pictureData(bytes);
+      if (data) { x.preview = data; previews++; }
+    }
+    return list;
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+}
+
+/**
+ * One attachment's bytes, for a download the owner asked for: only a part the message's own structure lists as an
+ * attachment, at most FILE_BYTES, read with BODY.PEEK, never kept. Null when the message or the part is not there.
+ */
+export async function attachmentICloud(hub: Hub, accountKey: string, ref: MoveRef, part: string): Promise<{ name: string; bytes: Buffer } | null> {
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    const kept = await openKept(c, ref);
+    if (!kept) return null;
+    const x = attachmentParts(kept.msg.bodyStructure).find((y) => y.part === part);
+    if (!x) return null;
+    if (x.size > FILE_BYTES) throw new StoreError(413, "This attachment is too big to download here (more than 25 MB). Open the mail in Apple Mail for it.");
+    const d = await c.download(kept.uid, x.part, { uid: true, maxBytes: FILE_BYTES });
+    const bytes = await readBytes(d?.content, FILE_BYTES);
+    if (!bytes) throw new StoreError(413, "This attachment is too big to download here (more than 25 MB). Open the mail in Apple Mail for it.");
+    return { name: x.name, bytes };
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The Mail screen's other folders (since 2026-11-20): Drafts, Sent, Junk, Trash and the owner's own, read-only
 
 /** A folder's part on the Mail screen, by the mark iCloud gives it (in any language); `own` for the owner's folders. */
@@ -720,7 +834,7 @@ export async function listFoldersICloud(hub: Hub, accountKey: string, since: Dat
         try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
         const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html));
         m.remote = [];
-        mails.push({ ...m, to: (msg.envelope?.to ?? []).slice(0, 20).map(mailAddress).filter((x) => x.address) });
+        mails.push({ ...m, attachments: attachmentParts(msg.bodyStructure), to: (msg.envelope?.to ?? []).slice(0, 20).map(mailAddress).filter((x) => x.address) });
       }
       out.push({ path: f.path, role: f.role, present: uids.map(id), seen: read.map(id), mails, more: fresh.length > FOLDER_NEW_MAX });
     }
@@ -937,4 +1051,6 @@ export const icloudInbox: InboxSource = {
   saveDraft: (hub, account, raw) => saveDraftICloud(hub, account, raw),
   listFolders: (hub, account, since, known) => listFoldersICloud(hub, account, since, known),
   moveTo: (hub, account, refs, dest) => moveToICloud(hub, account, refs, dest),
+  attachments: (hub, account, ref) => attachmentsICloud(hub, account, ref),
+  attachment: (hub, account, ref, part) => attachmentICloud(hub, account, ref, part),
 };

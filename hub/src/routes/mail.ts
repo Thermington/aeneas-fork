@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { bundleDelivery, folderMail, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { bundleDelivery, folderMail, mailAttachment, mailAttachments, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -86,6 +86,26 @@ export function mailRoutes() {
   r.post("/mail/drafts", async (c) => c.json(await saveMailDraft(c.get("hub"), await readJsonObject(c))));
   // A reply's greeting and sign-off, suggested by the local model (or the plain ones), for the owner to edit or drop.
   r.post("/mail/messages/:id/greeting", async (c) => c.json(await suggestGreeting(c.get("hub"), c.req.param("id"))));
+
+  // Attachments: the list with pictures' previews, read when a mail opens; one file as a download. Read-only.
+  r.get("/mail/messages/:id/attachments", async (c) => {
+    const list = await mailAttachments(c.get("hub"), c.req.param("id"));
+    if (!list) throw new StoreError(404, "This mail is not in the mailbox any more. Refresh and try again.");
+    return c.json({ attachments: list });
+  });
+  r.get("/mail/messages/:id/attachments/:part", async (c) => {
+    const file = await mailAttachment(c.get("hub"), c.req.param("id"), c.req.param("part"));
+    if (!file) throw new StoreError(404, "This attachment is not in the mailbox any more. Refresh and try again.");
+    // A file to save, never a page to show: its own type is not trusted (an "image" may be HTML), the browser must not
+    // guess one, and nothing in it may run if it is opened here anyway.
+    return new Response(new Uint8Array(file.bytes), { headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": `attachment; filename="${file.name.replace(/[^\x20-\x7e]|"/g, "_")}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "sandbox; default-src 'none'",
+      "Cache-Control": "no-store",
+    } });
+  });
 
   // Pin: on the hub only; nothing changes in iCloud.
   r.post("/mail/messages/:id/pin", async (c) => {

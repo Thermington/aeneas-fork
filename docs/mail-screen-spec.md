@@ -248,6 +248,17 @@ The hub sends new-mail alerts to devices. The client only offers the settings:
 - **They're checked before the built-in rules,** so they can take a person's mail too ("Family").
 - **At most 20.** Deleting one clears its Show in Inbox and Notify settings first.
 
+### 9.7 Attachments (next PR)
+
+- **Rows** show a paperclip when `attachments` is a number. A thread's is its messages' together.
+- **On an open mail** with `attachments` present (a number, or null for "not known yet"), ask
+  `GET /mail/messages/:id/attachments` and show the pictures' previews (`preview`, checked with `previewSrc`: a `data:`
+  JPEG, PNG, GIF or WebP only) and a list of the files with their sizes and **Download**.
+- **Download** saves the file (`GET .../attachments/:part`, which answers `application/octet-stream`). Never open it
+  inside the app. Before a kind of file that can run programs (`riskyFile`: programs, scripts, shortcuts, disk images,
+  macro-enabled Office files), ask: "… can run programs on your computer. Download it only if you expected it from
+  <the sender's address>."
+
 ### 9.6 Folders (next PR)
 
 - **What shows:** Drafts, Sent, Spam (iCloud's Junk), Trash and the owner's own folders, kept by the hub like the

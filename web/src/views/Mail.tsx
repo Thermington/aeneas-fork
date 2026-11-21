@@ -1,5 +1,6 @@
 import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from "react";
 import { openExternal } from "../tauri/bridge";
+import { saveBlob } from "../lib/download";
 import { engine } from "../sync/engine";
 import { isTypingTarget } from "../lib/keys";
 import { useEntities } from "../sync/hooks";
@@ -25,6 +26,10 @@ import {
   type FolderMail,
   type MailFolder,
   type MoveTarget,
+  type MailAttachment,
+  fileSize,
+  previewSrc,
+  riskyFile,
   FOLDER_ICONS,
   folderCount,
   folderLabel,
@@ -532,7 +537,7 @@ function FolderView({ f, q, stamp, open, setOpen }: { f: MailFolder; q: string; 
                 <span className="mailx-dotcol">{!m.seen && <span className="mailx-dot" title="Unread" />}</span>
                 <span className="mailx-av" aria-hidden="true">{initials(m.folder_role === "sent" || m.folder_role === "drafts" ? m.to[0] ?? m.from : m.from)}</span>
                 <span className="mailx-what">
-                  <span className="who"><b>{folderWho(m)}</b></span>
+                  <span className="who"><b>{folderWho(m)}</b>{!!m.attachments && <span className="clipmark" title={m.attachments === 1 ? "An attachment" : `${m.attachments} attachments`}><Icon name="clip" /></span>}</span>
                   <span className="line"><span className="subj">{m.subject || "(no subject)"}</span>{m.preview && <> · {m.preview}</>}</span>
                 </span>
                 <span className="when">{whenLabel(m.at)}</span>
@@ -954,7 +959,7 @@ function Row({ m, open, setOpen }: { m: MailThread; open: boolean; setOpen: (id:
         <span className="mailx-dotcol">{isUnread(m) && <span className="mailx-dot" title="Unread" />}</span>
         <Avatar m={m} />
         <span className="mailx-what">
-          <span className="who"><b>{m.people}</b>{m.pinned && <span className="pinmark" title="Pinned"><Icon name="pin" /></span>}</span>
+          <span className="who"><b>{m.people}</b>{m.pinned && <span className="pinmark" title="Pinned"><Icon name="pin" /></span>}{!!m.attachments && <span className="clipmark" title={m.attachments === 1 ? "An attachment" : `${m.attachments} attachments`}><Icon name="clip" /></span>}</span>
           <span className="line"><span className="subj">{m.subject || "(no subject)"}</span>{m.preview && <> · {m.preview}</>}</span>
           {/* Its first card's facts, as text (the row is a button: Track is on the open mail). */}
           {m.cards?.[0] && <span className={`mailx-cardline b-${CARD_ICON[m.cards[0].kind]}`}><Icon name={CARD_ICON[m.cards[0].kind]} />{cardLine(m.cards[0])}</span>}
@@ -1353,6 +1358,56 @@ function MailFacts({ cards }: { cards: MailCard[] }) {
   );
 }
 
+/**
+ * An open mail's attachments: read from the mailbox by the hub when the mail opens (the list kept with the mail says
+ * whether there are any). Pictures show as previews (real pictures only, checked by the hub and here); each file has
+ * Download, which saves it (never opens it here), after a warning for a kind of file that can run programs.
+ */
+function Attachments({ m }: { m: MailSummary }) {
+  const [list, setList] = useState<MailAttachment[] | null>(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    engine.client?.mailAttachments(m.id).then((r) => { if (live) setList(r.attachments); }).catch((e) => { if (live) setErr(plainError(e)); });
+    return () => { live = false; };
+  }, [m.id]);
+  const save = async (a: MailAttachment) => {
+    const c = engine.client;
+    if (!c) return;
+    if (riskyFile(a.name) && !window.confirm(`${a.name} is a kind of file that can run programs on your computer. Download it only if you expected it from ${m.from.address}.`)) return;
+    setBusy(a.part);
+    setErr("");
+    try { saveBlob(await c.mailAttachment(m.id, a.part), a.name); } catch (e) { setErr(plainError(e)); }
+    setBusy(null);
+  };
+  if (!list && !err) return m.attachments ? <div className="muted small mailx-card-pad">Loading {m.attachments === 1 ? "the attachment" : `${m.attachments} attachments`}</div> : null;
+  if (list && !list.length) return null;
+  return (
+    <div className="mailx-atts mailx-card-pad">
+      {list && list.some((a) => previewSrc(a.preview)) && (
+        <div className="mailx-att-pics">
+          {list.map((a) => { const src = previewSrc(a.preview); return src ? <button key={a.part} type="button" className="mailx-att-pic" title={`Download ${a.name}`} onClick={() => void save(a)}><img src={src} alt={a.name} /></button> : null; })}
+        </div>
+      )}
+      {list && (
+        <ul className="mailx-att-list">
+          {list.map((a) => (
+            <li key={a.part}>
+              <Icon name="clip" />
+              <span className="name">{a.name}</span>
+              <span className="muted small">{fileSize(a.size)}</span>
+              {riskyFile(a.name) && <span className="warn small">Can run programs</span>}
+              <button type="button" className="small" disabled={busy === a.part} onClick={() => void save(a)}>{busy === a.part ? "Downloading" : "Download"}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {err && <div className="error small">{err}</div>}
+    </div>
+  );
+}
+
 /** One message's body: the mail as sent (the hub's cleaned page), or its text; fetched from the hub when it shows. */
 function Message({ m }: { m: MailSummary }) {
   const [full, setFull] = useState<MailMessage | null>(null);
@@ -1386,6 +1441,7 @@ function Message({ m }: { m: MailSummary }) {
     <>
       {nameHidesAddress(m.from) && <div className="warn small mailx-card-pad">The sender's name shows a different address than the one it came from.</div>}
       {!!m.cards?.length && <MailFacts cards={m.cards} />}
+      {m.attachments !== undefined && <Attachments m={m} />}
       {askPictures && (
         <div className="mailx-pictures mailx-card-pad small">
           <button type="button" disabled={pictures.busy} onClick={() => void showPictures()}>{pictures.busy ? "Fetching pictures" : "Show pictures"}</button>
@@ -1532,6 +1588,7 @@ const ICONS: Record<string, string> = {
   spam: "M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6zM12 8v5M12 16v.5",
   trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",
   folder: "M3 6h6l2 2h10v11H3z",
+  clip: "M8 12.5l6.5-6.5a3 3 0 0 1 4.2 4.2L10 19a5 5 0 0 1-7-7l8-8",
   own: "M7 4h10v16l-5-4-5 4z",
   dot: "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z",
   pin: "M9 4h6l-1 6 3 3H7l3-3zM12 13v7",

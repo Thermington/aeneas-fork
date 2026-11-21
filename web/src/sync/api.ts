@@ -6,7 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
-import type { BundleDelivery, CustomBundle, FolderMail, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
+import type { BundleDelivery, CustomBundle, FolderMail, MailAttachment, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -1017,6 +1017,20 @@ export class HubClient {
   /** Delete (trash), Spam (junk), Not spam or Move to Inbox (inbox), or Move to one of the owner's folders (its key). */
   mailMove(ids: string[], to: MoveTarget) {
     return this.req<MailMovedTo>("POST", "/mail/move", { ids, to });
+  }
+  /** An open mail's attachments now, with its pictures' previews (read from the mailbox by the hub, kept nowhere). */
+  mailAttachments(id: string) {
+    return this.req<{ attachments: MailAttachment[] }>("GET", `/mail/messages/${encodeURIComponent(id)}/attachments`);
+  }
+  /** One attachment, as a file to save. */
+  async mailAttachment(id: string, part: string): Promise<Blob> {
+    const res = await this.fetchImpl(this.url(`/mail/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(part)}`), { headers: this.headers() });
+    if (!res.ok) {
+      let msg = `${res.status}`;
+      try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not JSON */ }
+      throw new HubError(res.status, msg);
+    }
+    return res.blob();
   }
   /** One of the mailbox's other folders: its kept mail, newest first. */
   mailFolder(key: string) {

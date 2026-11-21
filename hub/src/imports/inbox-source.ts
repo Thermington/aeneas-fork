@@ -45,6 +45,8 @@ export interface InboxMail {
   mine: boolean;
   /** Its key facts (mail-cards.ts, mailCards): from the sender's schema.org data in its HTML, or patterns in its text. */
   cards?: MailCard[];
+  /** Its attachments, from its structure (no file read): names, types and sizes. */
+  attachments?: import("./icloud.js").MailAttachment[];
 }
 
 /**
@@ -76,6 +78,10 @@ export interface InboxSource {
   setSeen(hub: Hub, account: string, refs: MoveRef[], seen: boolean): Promise<boolean[]>;
   /** Pin or unpin as the mailbox's own flag (`\Flagged` in IMAP: Apple Mail's flag), fenced as setSeen; true for each one changed. */
   setFlagged?(hub: Hub, account: string, refs: MoveRef[], flagged: boolean): Promise<boolean[]>;
+  /** A kept message's attachments now, with previews of its pictures (read-only, kept in memory); null when it is gone. */
+  attachments?(hub: Hub, account: string, ref: MoveRef): Promise<(import("./icloud.js").MailAttachment & { preview?: string })[] | null>;
+  /** One attachment's bytes for a download (read-only, never kept); null when the message or the part is gone. */
+  attachment?(hub: Hub, account: string, ref: MoveRef, part: string): Promise<{ name: string; bytes: Buffer } | null>;
   /** Save a draft (an RFC 5322 message, mail-compose.ts) to the mailbox's Drafts folder; it throws when not saved. Never sends. */
   saveDraft?(hub: Hub, account: string, raw: Buffer): Promise<void>;
   /** Delete (to Trash), Spam (to Junk), Not spam and Move to: each message's new id, or null when it was not moved (MOVE only). */

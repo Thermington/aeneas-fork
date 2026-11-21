@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -207,7 +207,9 @@ describe("mail screen rules", () => {
     expect(logoSrc(`${svg}" onerror="alert(1)`)).toBeNull();
     expect(logoSrc(undefined)).toBeNull();
     const src = fs.readFileSync(path.join(__dirname, "../views/Mail.tsx"), "utf8");
-    expect(src.match(/<img [^>]*>/g)).toEqual([`<img src={logo} alt="" />`]);
+    // The verified logo, and an attachment's preview (previewSrc: a data: picture, checked): no other picture.
+    expect(src.match(/<img [^>]*>/g)).toEqual([`<img src={logo} alt="" />`, `<img src={src} alt={a.name} />`]);
+    expect(src).toMatch(/const src = previewSrc\(a\.preview\)/);
     expect(src).toMatch(/const logo = m\.logo_domain \? logoSrc\(logos\[m\.logo_domain\]\) : null;/);
   });
 
@@ -411,5 +413,19 @@ describe("mail move keys", () => {
     expect([k("Delete"), k("Backspace"), k("!")]).toEqual(["delete", "delete", "spam"]);
     expect(mailKeyAction({ key: "Backspace", shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }, true)).toBeNull();
     expect(MAIL_KEYS.some((x) => x.keys === "Delete") && MAIL_KEYS.some((x) => x.keys === "!")).toBe(true);
+  });
+});
+
+describe("mail attachments", () => {
+  it("shows a preview only for a data: JPEG, PNG, GIF or WebP", () => {
+    expect(previewSrc("data:image/png;base64,iVBORw0KGgo=")).toBe("data:image/png;base64,iVBORw0KGgo=");
+    for (const bad of ["data:image/svg+xml;base64,PHN2Zz4=", "https://evil.example/x.png", "data:text/html;base64,PHNjcmlwdD4=", "javascript:alert(1)", undefined]) expect(previewSrc(bad)).toBeNull();
+  });
+  it("warns before files that can run programs", () => {
+    for (const n of ["setup.exe", "invoice.pdf.exe", "run.JS", "report.xlsm", "photo.lnk", "disk.iso"]) expect(riskyFile(n)).toBe(true);
+    for (const n of ["photo.jpg", "tickets.pdf", "notes.txt", "budget.xlsx"]) expect(riskyFile(n)).toBe(false);
+  });
+  it("says sizes as people read them", () => {
+    expect([fileSize(512), fileSize(840_000), fileSize(2_500_000), fileSize(25_000_000)]).toEqual(["512 B", "820 KB", "2.4 MB", "24 MB"]);
   });
 });
