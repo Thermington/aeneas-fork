@@ -156,7 +156,7 @@ const folderOf = (id: string) => /^\d+:\d+:([\s\S]+)$/.exec(id)?.[1] ?? "";
  * 3. mail kept as in the Inbox (or snoozed there) that is no longer in it was archived, moved or deleted elsewhere:
  *    it goes. Done mail is in Archive and stays (for its kept time). Nothing goes when the listing found no Inbox.
  */
-export function keepInbox(db: DB, account: string, found: { present: string[] | null; seen?: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; refs?: { id: string; refs: string[] }[] }): { kept: number; gone: number; woken: string[]; fresh: string[] } {
+export function keepInbox(db: DB, account: string, found: { present: string[] | null; seen?: string[] | null; flagged?: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; refs?: { id: string; refs: string[] }[] }): { kept: number; gone: number; woken: string[]; fresh: string[] } {
   const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen, cards)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const setRefs = db.prepare("UPDATE inbox SET refs = ? WHERE account = ? AND id = ?");
@@ -190,6 +190,13 @@ export function keepInbox(db: DB, account: string, found: { present: string[] | 
       const read = new Set(found.seen);
       const mark = db.prepare("UPDATE inbox SET seen = ? WHERE account = ? AND id = ? AND seen != ?");
       for (const id of found.present) { const v = read.has(id) ? 1 : 0; mark.run(v, account, id, v); }
+    }
+    // Pinned as the mailbox has it (since 2026-11-21): a message flagged in Apple Mail is pinned here, one not flagged
+    // is not; a thread is pinned while any of its mail is (Pin here flags all of it).
+    if (found.present && found.flagged) {
+      const pins = new Set(found.flagged);
+      const pin = db.prepare("UPDATE inbox SET pinned = ? WHERE account = ? AND id = ? AND pinned != ?");
+      for (const id of found.present) { const v = pins.has(id) ? 1 : 0; pin.run(v, account, id, v); }
     }
     if (found.present) {
       const here = new Set(found.present);
@@ -859,6 +866,48 @@ export async function setSeenMany(hub: Hub, keys: string[], seen: boolean): Prom
   return { ok: rows.length, synced };
 }
 
+/**
+ * Pin or unpin a kept mail's thread (since 2026-11-21, kept the same as Apple Mail's flag): on the hub at once, then
+ * in the mailbox, after any refresh or move that is running: the `\Flagged` flag added to or removed from each of the
+ * thread's received messages (its source's setFlagged: that flag only, each message checked again). `synced`: how many
+ * the mailbox took. A refresh that read the flags before this reached the mailbox wrote the old pins back: said again.
+ */
+export async function setPinnedSynced(hub: Hub, key: string, pinned: boolean): Promise<{ ok: boolean; synced: number }> {
+  const db = hub.mailDb;
+  if (!setPinned(db, key, pinned)) return { ok: false, synced: 0 };
+  const members = db.prepare(`SELECT key, account FROM inbox WHERE (${THREAD_OF}) AND state IN ('inbox', 'snoozed', 'done')`).all(key, key) as { key: string; account: string }[];
+  let synced = 0;
+  for (const account of [...new Set(members.map((m) => m.account))]) {
+    const mine = members.filter((m) => m.account === account);
+    const source = sourceOf(account);
+    if (!source?.setFlagged) continue;
+    await exclusive(hub, async () => {
+      const now = db.prepare("SELECT id, message_id FROM inbox WHERE key = ?");
+      const refs = mine.map((m) => now.get(m.key) as { id: string; message_id: string | null } | undefined).filter((x): x is { id: string; message_id: string | null } => !!x);
+      if (!refs.length) return;
+      synced += (await source.setFlagged!(hub, account, refs, pinned)).filter(Boolean).length;
+      setPinned(db, key, pinned);
+    }).catch((e) => console.error(`[mail-inbox] ${mailboxLabel(hub, account)}: pin ${errCode(e)}`));
+  }
+  return { ok: true, synced };
+}
+
+/**
+ * Pins made before pins were kept as flags (2026-11-21): flagged in the mailbox once, before the first refresh that reads
+ * the flags, so that refresh does not take them away. Marked done per mailbox in `settings` (`pins_flagged:<account>`).
+ */
+async function flagOldPins(hub: Hub, account: string): Promise<void> {
+  const db = hub.mailDb;
+  const done = `pins_flagged:${account}`;
+  if (db.prepare("SELECT 1 FROM settings WHERE key = ?").get(done)) return;
+  const source = sourceOf(account);
+  if (!source?.setFlagged) return;
+  const refs = db.prepare("SELECT id, message_id FROM inbox WHERE account = ? AND pinned = 1 AND state IN ('inbox', 'snoozed', 'done')").all(account) as { id: string; message_id: string | null }[];
+  for (const part of [...Array(Math.ceil(refs.length / MOVE_MAX)).keys()].map((i) => refs.slice(i * MOVE_MAX, (i + 1) * MOVE_MAX))) await source.setFlagged(hub, account, part, true);
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(done, new Date().toISOString());
+  if (refs.length) console.log(`[mail-inbox] ${mailboxLabel(hub, account)}: ${refs.length} pins flagged in the mailbox`);
+}
+
 export async function setSeen(hub: Hub, key: string, seen: boolean): Promise<{ ok: boolean; synced: boolean }> {
   const r = await setSeenMany(hub, [key], seen);
   return { ok: r.ok === 1, synced: r.synced === 1 };
@@ -1254,6 +1303,8 @@ export function refreshMail(hub: Hub, opts: { owner?: boolean } = {}, now: Date 
       try {
         const missing = db.prepare("SELECT 1 FROM inbox WHERE account = ? AND id = ? AND refs IS NULL");
         const sentFrom = (db.prepare("SELECT sent_at FROM mailboxes WHERE account = ?").get(account) as { sent_at: string | null } | undefined)?.sent_at ?? null;
+        // Old pins become flags first (once), or this listing's flags would unpin them.
+        await flagOldPins(hub, account);
         const found = await source.list(hub, account, since, isKept(db, account), isKeptMessage(db, account), { ...opts, needsRefs: (id) => !!missing.get(account, id), sentFrom });
         const before = (db.prepare("SELECT last_refresh FROM mailboxes WHERE account = ?").get(account) as { last_refresh: string | null } | undefined)?.last_refresh ?? null;
         const r = keepInbox(db, account, found);

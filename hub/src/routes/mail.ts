@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { bundleDelivery, folderMail, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { bundleDelivery, folderMail, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -91,8 +91,9 @@ export function mailRoutes() {
   r.post("/mail/messages/:id/pin", async (c) => {
     const body = await readJsonObject(c);
     if (typeof body.pinned !== "boolean") throw new StoreError(422, "pinned is true or false");
-    if (!setPinned(c.get("hub").mailDb, c.req.param("id"), body.pinned)) throw new StoreError(404, "that message is not kept (it left the Inbox)");
-    return c.json({ ok: true, pinned: body.pinned });
+    const r2 = await setPinnedSynced(c.get("hub"), c.req.param("id"), body.pinned);
+    if (!r2.ok) throw new StoreError(404, "that message is not kept (it left the Inbox)");
+    return c.json({ ok: true, pinned: body.pinned, synced: r2.synced });
   });
 
   // Done (a Sweep is many at once) and Undo: the only routes that change the mailbox, a MOVE between Inbox and Archive.

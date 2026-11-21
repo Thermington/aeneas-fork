@@ -26,6 +26,8 @@ export interface Msg {
   headers?: string;
   /** Read (the \Seen flag). */
   seen?: boolean;
+  /** Flagged (Apple Mail's flag; a pin on the Mail screen). */
+  flagged?: boolean;
 }
 
 export const FOLDERS: ImapFolder[] = [
@@ -77,16 +79,16 @@ export function fake(messages: Msg[], opts: { password?: string; noMove?: boolea
       },
       async *fetch() {
         seen.calls.push("fetch");
-        for (const m of messages.filter((x) => x.folder === open)) yield { uid: m.uid, flags: new Set(m.seen ? ["\\Seen"] : []) };
+        for (const m of messages.filter((x) => x.folder === open)) yield { uid: m.uid, flags: new Set([...(m.seen ? ["\\Seen"] : []), ...(m.flagged ? ["\\Flagged"] : [])]) };
       },
       ...({
         async messageFlagsAdd(uid: string, flags: string[]) {
           seen.calls.push("messageFlagsAdd"); seen.flags.push({ uid: Number(uid), flags, add: true });
-          const m = find(uid); if (m) m.seen = true; return !!m;
+          const m = find(uid); if (m) { if (flags[0] === "\\Flagged") m.flagged = true; else m.seen = true; } return !!m;
         },
         async messageFlagsRemove(uid: string, flags: string[]) {
           seen.calls.push("messageFlagsRemove"); seen.flags.push({ uid: Number(uid), flags, add: false });
-          const m = find(uid); if (m) m.seen = false; return !!m;
+          const m = find(uid); if (m) { if (flags[0] === "\\Flagged") m.flagged = false; else m.seen = false; } return !!m;
         },
         /** APPEND: a draft the Mail screen saved, recorded as sent to the server. */
         async append(path: string, content: Buffer, flags: string[]) {

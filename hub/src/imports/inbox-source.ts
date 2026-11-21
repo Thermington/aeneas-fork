@@ -58,7 +58,7 @@ export interface InboxMail {
  * - `mails` also holds the owner's replies (`mine`) from the sent mail that answer kept mail or mail listed now;
  * - `refs`: kept messages (`needsRefs`) with the Message-IDs they answer, for mail kept before threads.
  */
-export interface InboxListing { present: string[] | null; seen: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; more: boolean; refs?: { id: string; refs: string[] }[]; /** How far the Sent folder has been read (`<UIDVALIDITY>:<UID>`), for the next refresh's `sentFrom`; absent when it was not read. */ sentAt?: string }
+export interface InboxListing { present: string[] | null; seen: string[] | null; /** Of `present`, the ids the mailbox has flagged (pinned here); absent or null when not known. */ flagged?: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; more: boolean; refs?: { id: string; refs: string[] }[]; /** How far the Sent folder has been read (`<UIDVALIDITY>:<UID>`), for the next refresh's `sentFrom`; absent when it was not read. */ sentAt?: string }
 
 /** One kept message to move: its id where it is, and the Message-ID the hub kept for it. */
 export interface MoveRef { id: string; message_id: string | null }
@@ -74,6 +74,8 @@ export interface InboxSource {
   move(hub: Hub, account: string, refs: MoveRef[], to: "archive" | "inbox"): Promise<Map<string, string | null>>;
   /** Mark a kept message read or unread in the mailbox, after checking it is still that message; false when it was not. */
   setSeen(hub: Hub, account: string, refs: MoveRef[], seen: boolean): Promise<boolean[]>;
+  /** Pin or unpin as the mailbox's own flag (`\Flagged` in IMAP: Apple Mail's flag), fenced as setSeen; true for each one changed. */
+  setFlagged?(hub: Hub, account: string, refs: MoveRef[], flagged: boolean): Promise<boolean[]>;
   /** Save a draft (an RFC 5322 message, mail-compose.ts) to the mailbox's Drafts folder; it throws when not saved. Never sends. */
   saveDraft?(hub: Hub, account: string, raw: Buffer): Promise<void>;
   /** Delete (to Trash), Spam (to Junk), Not spam and Move to: each message's new id, or null when it was not moved (MOVE only). */

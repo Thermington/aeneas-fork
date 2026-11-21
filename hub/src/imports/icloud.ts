@@ -109,9 +109,9 @@ export interface ImapMover {
   mailboxOpen(path: string, options: { readOnly: false }): Promise<{ uidValidity: bigint }>;
   /** imapflow's MOVE: `uidMap` gives each message's new UID in the destination (UIDPLUS, which iCloud has). */
   messageMove(uid: string, destination: string, options: { uid: true }): Promise<{ uidValidity?: bigint; uidMap?: Map<number, number> } | false>;
-  /** STORE +FLAGS / -FLAGS of `\Seen` only: the type takes no other flag (setSeenICloud). */
-  messageFlagsAdd(uid: string, flags: ["\\Seen"], options: { uid: true }): Promise<boolean>;
-  messageFlagsRemove(uid: string, flags: ["\\Seen"], options: { uid: true }): Promise<boolean>;
+  /** STORE +FLAGS / -FLAGS of `\Seen` (read) or `\Flagged` (a pin) only: the type takes no other flag (setFlagICloud). */
+  messageFlagsAdd(uid: string, flags: ["\\Seen"] | ["\\Flagged"], options: { uid: true }): Promise<boolean>;
+  messageFlagsRemove(uid: string, flags: ["\\Seen"] | ["\\Flagged"], options: { uid: true }): Promise<boolean>;
 }
 
 const realClient = (login: ImapLogin): ImapClient => new ImapFlow({
@@ -550,6 +550,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
   if (a.refused_at && !opts.owner) throw new StoreError(409, REFUSED);
   let present: string[] | null = null;
   let seen: string[] | null = null;
+  let flagged: string[] | null = null;
   const mails: InboxMail[] = [];
   const moved: { id: string; message_id: string }[] = [];
   const refs: { id: string; refs: string[] }[] = [];
@@ -565,10 +566,16 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
       const all = (await c.search({ all: true }, { uid: true })) || [];
       present = all.map(id);
       // Read or unread, as the mailbox has it (read in Apple Mail counts): FETCH FLAGS, which reads and changes nothing.
+      // Flagged in Apple Mail is pinned here (since 2026-11-21): the same FETCH FLAGS.
       const read = new Set<number>();
+      const pins = new Set<number>();
       if (c.fetch) {
-        if (all.length) for await (const m of c.fetch("1:*", { uid: true, flags: true }, { uid: true })) if (m.flags?.has("\\Seen")) read.add(m.uid);
+        if (all.length) for await (const m of c.fetch("1:*", { uid: true, flags: true }, { uid: true })) {
+          if (m.flags?.has("\\Seen")) read.add(m.uid);
+          if (m.flags?.has("\\Flagged")) pins.add(m.uid);
+        }
         seen = all.filter((uid) => read.has(uid)).map(id);
+        flagged = all.filter((uid) => pins.has(uid)).map(id);
       }
       const fresh = ((await c.search({ since }, { uid: true })) || []).filter((uid) => !known(id(uid)));
       for (const uid of [...fresh].sort((x, y) => y - x)) {
@@ -637,7 +644,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
     throw f;
   }
   if (a.refused_at) saveAccount(hub, email, { last_error: null, refused_at: null });
-  return { present, seen, mails, moved, more, refs, ...(sentAt ? { sentAt } : {}) };
+  return { present, seen, flagged, mails, moved, more, refs, ...(sentAt ? { sentAt } : {}) };
 }
 
 /** Show original: one message's whole text, fetched now and never kept; null when it is gone from the mailbox. */
@@ -829,6 +836,19 @@ export async function moveICloud(hub: Hub, accountKey: string, refs: MoveRef[], 
  * removed. False when it was not changed.
  */
 export async function setSeenICloud(hub: Hub, accountKey: string, refs: MoveRef[], seen: boolean): Promise<boolean[]> {
+  return setFlagICloud(hub, accountKey, refs, "\\Seen", seen);
+}
+
+/**
+ * Pin or unpin as Apple Mail's flag (since 2026-11-21): `\Flagged` added or removed, fenced exactly as the read flag
+ * (setFlagICloud): only a kept message in the Inbox or Archive, its UIDVALIDITY and Message-ID checked again.
+ */
+export async function setFlaggedICloud(hub: Hub, accountKey: string, refs: MoveRef[], flagged: boolean): Promise<boolean[]> {
+  return setFlagICloud(hub, accountKey, refs, "\\Flagged", flagged);
+}
+
+/** Add or remove one flag, `\Seen` or `\Flagged` and no other, on kept messages in the Inbox or Archive (setSeenICloud's fence). */
+async function setFlagICloud(hub: Hub, accountKey: string, refs: MoveRef[], flag: "\\Seen" | "\\Flagged", on: boolean): Promise<boolean[]> {
   const out = refs.map(() => false);
   const todo = refs.map((ref, i) => ({ i, ref, at: parseId(ref.id) })).filter((x) => x.at && x.ref.message_id);
   if (!todo.length) return out;
@@ -847,7 +867,7 @@ export async function setSeenICloud(hub: Hub, accountKey: string, refs: MoveRef[
         if (String(box.uidValidity) !== x.at!.validity) continue;
         const msg = await c.fetchOne(x.at!.uid, { envelope: true, bodyStructure: true, internalDate: true }, { uid: true });
         if (!msg || bareId(msg.envelope?.messageId) !== x.ref.message_id) continue;
-        out[x.i] = await (seen ? w.messageFlagsAdd(x.at!.uid, ["\\Seen"], { uid: true }) : w.messageFlagsRemove(x.at!.uid, ["\\Seen"], { uid: true }));
+        out[x.i] = await (on ? w.messageFlagsAdd(x.at!.uid, [flag], { uid: true }) : w.messageFlagsRemove(x.at!.uid, [flag], { uid: true }));
       }
     }
     return out;
@@ -913,6 +933,7 @@ export const icloudInbox: InboxSource = {
   list: (hub, account, since, known, knownMessage, opts) => listInboxICloud(hub, account, since, known, knownMessage, opts),
   move: (hub, account, refs, to) => moveICloud(hub, account, refs, to),
   setSeen: (hub, account, refs, seen) => setSeenICloud(hub, account, refs, seen),
+  setFlagged: (hub, account, refs, flagged) => setFlaggedICloud(hub, account, refs, flagged),
   saveDraft: (hub, account, raw) => saveDraftICloud(hub, account, raw),
   listFolders: (hub, account, since, known) => listFoldersICloud(hub, account, since, known),
   moveTo: (hub, account, refs, dest) => moveToICloud(hub, account, refs, dest),

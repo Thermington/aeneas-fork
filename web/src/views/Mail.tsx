@@ -615,7 +615,7 @@ function Mailboxes({ data, showKeys }: { data: MailList; showKeys: () => void })
               {m.last_error && <div className="error">{m.last_error}</div>}
             </div>
           ))}
-          <div className="muted">Opening a mail marks it read in iCloud too; Done moves it to Archive there, and Undo moves it back.</div>
+          <div className="muted">Opening a mail marks it read in iCloud too, and Pin flags it there (a flag in Apple Mail pins it here); Done moves it to Archive there, and Undo moves it back.</div>
           <NotifySettings />
         </div>
       )}

@@ -182,7 +182,9 @@ This part matters most. Mail is hostile input.
   - Next week: Monday at 8 AM.
   - The owner's snooze times change all of these. A snoozed thread offers **Change snooze** and **Unsnooze**. Snoozing
     shows Undo.
-- **Pin** applies to the whole thread. Pinned mail stays where it is, shows a pin, and Sweep passes it by.
+- **Pin** applies to the whole thread. Pinned mail stays where it is, shows a pin, and Sweep passes it by. **(next PR)**
+  A pin is also Apple Mail's flag, both ways: pinning flags the thread's mail in iCloud, and a mail flagged in Apple
+  Mail shows pinned after the next refresh.
 - **Read and unread:** the read flag syncs both ways with iCloud.
 - **Delete, Spam and Move to (next PR):** `POST /mail/move`, IMAP `MOVE` only, so nothing is erased from Aeneas.
   - On an open thread: **Delete** (to Trash), **Spam** (to Junk) and a **Move to…** menu of the owner's folders. They
