@@ -58,9 +58,12 @@ Reload the list after every action, and when the screen comes back to the front.
   is selected, the bar becomes "N selected" with Done (Move to Inbox in Done), Snooze, Pin/Unpin, Mark read,
   Mark unread and ✕. It keeps one height either way.
 - **Search** matches every word, ignoring case, in the sender's name, the address, the subject and the preview. It
-  searches the current view. In the phone layout (below 768px) it is a magnifier beside Refresh **(next PR)**; tapped,
-  the field takes the whole bar with a close button, which clears the search, and it stays open while a search is
-  typed. The bar's side parts never shrink below what they hold; the search box shrinks instead.
+  searches the current view. On a phone held upright (up to 560px) it is a magnifier beside Refresh **(next PR)**;
+  tapped, the field takes the whole bar with a close button, which clears the search, and it stays open while a search
+  is typed. A phone on its side shows the search box.
+- **Centering:** Refresh, search and Pinned only stay centered in the bar at every width. The two sides are equal, never
+  narrower than what they hold, and the search box shrinks to keep them so. Up to 420px, Pinned only is a round pin
+  button and New mail a round pencil.
 
 ---
 
