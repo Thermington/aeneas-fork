@@ -4,7 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import type { Hub } from "./hub.js";
-import { icloudInbox, INBOX_DAYS } from "./imports/icloud.js";
+import { icloudInbox, INBOX_DAYS, type FolderListing, type FolderRole } from "./imports/icloud.js";
 import type { InboxMail, InboxSource, MailAddress } from "./imports/inbox-source.js";
 
 /** Where the Mail screen's mail comes from (imports/inbox-source.ts): iCloud today; a Gmail source is one more entry. */
@@ -84,6 +84,26 @@ CREATE INDEX IF NOT EXISTS inbox_mid ON inbox(account, message_id);
 CREATE TABLE IF NOT EXISTS mailboxes (account TEXT PRIMARY KEY, last_refresh TEXT, last_error TEXT, more INTEGER NOT NULL DEFAULT 0, sent_at TEXT);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS logos (domain TEXT PRIMARY KEY, url TEXT NOT NULL, svg TEXT, fetched_at TEXT);
+CREATE TABLE IF NOT EXISTS folders (account TEXT NOT NULL, path TEXT NOT NULL, key TEXT NOT NULL UNIQUE, role TEXT NOT NULL, more INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account, path));
+CREATE TABLE IF NOT EXISTS folder_mail (
+  account TEXT NOT NULL,
+  id TEXT NOT NULL,
+  key TEXT NOT NULL UNIQUE,
+  folder TEXT NOT NULL,
+  message_id TEXT,
+  at TEXT NOT NULL,
+  from_name TEXT NOT NULL,
+  from_address TEXT NOT NULL,
+  to_list TEXT NOT NULL,
+  reply_to TEXT,
+  subject TEXT NOT NULL,
+  text TEXT NOT NULL,
+  automated INTEGER NOT NULL,
+  html TEXT,
+  seen INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account, id)
+);
+CREATE INDEX IF NOT EXISTS folder_mail_at ON folder_mail(account, folder, at);
 `;
 
 export function openMailDb(dbPath: string): DB {
@@ -278,7 +298,8 @@ export function rethread(db: DB, account: string): void {
 
 /** Unlinking a mailbox: its mail goes at once. */
 export function deleteMailbox(db: DB, account: string): number {
-  const n = db.prepare("DELETE FROM inbox WHERE account = ?").run(account).changes;
+  const n = db.prepare("DELETE FROM inbox WHERE account = ?").run(account).changes + db.prepare("DELETE FROM folder_mail WHERE account = ?").run(account).changes;
+  db.prepare("DELETE FROM folders WHERE account = ?").run(account);
   db.prepare("DELETE FROM mailboxes WHERE account = ?").run(account);
   db.pragma("wal_checkpoint(TRUNCATE)");
   return n;
@@ -286,7 +307,8 @@ export function deleteMailbox(db: DB, account: string): number {
 
 /** The module switched off: every message goes. */
 export function deleteAllMail(db: DB): number {
-  const n = db.prepare("DELETE FROM inbox").run().changes;
+  const n = db.prepare("DELETE FROM inbox").run().changes + db.prepare("DELETE FROM folder_mail").run().changes;
+  db.prepare("DELETE FROM folders").run();
   db.prepare("DELETE FROM mailboxes").run();
   db.prepare("DELETE FROM logos").run();
   db.pragma("wal_checkpoint(TRUNCATE)");
@@ -296,8 +318,8 @@ export function deleteAllMail(db: DB): number {
 // ---------------------------------------------------------------------------------------------------------------------
 // Reading what is kept (the routes)
 
-/** `sent`: the owner's own reply in a thread (from the Sent folder), never in a list of its own. */
-export type MailState = "inbox" | "snoozed" | "done" | "sent";
+/** `sent`: the owner's own reply in a thread (from the Sent folder), never in a list of its own. `folder`: in another folder (folder_mail). */
+export type MailState = "inbox" | "snoozed" | "done" | "sent" | "folder";
 /** One message in the list: no text, a first line of it. */
 export interface MailSummary {
   id: string; at: string; from: MailAddress; reply_to?: string; subject: string; preview: string;
@@ -868,9 +890,101 @@ export function mailLogos(db: DB): Record<string, string> {
  */
 export function mailMessage(db: DB, key: string, byTor = true): MailMessage | null {
   const r = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, html, remote, seen, mine, cards FROM inbox WHERE key = ?").get(key) as (Row & { html: string | null; remote: string | null }) | undefined;
-  if (!r) return null;
+  if (!r) return folderMessage(db, key);
   const quote = quoteStart(r.text);
   return { ...summary(r), text: r.text, html: r.html ? mailDocument(withImages(r.html, [])) : null, pictures_pending: !!r.remote && byTor, pictures_ask: !!r.remote && !byTor, ...(quote >= 0 ? { quote_at: quote } : {}) };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The other folders (since 2026-11-20): Drafts, Sent, Junk, Trash and the owner's own, kept like the Inbox
+
+/** At most this many messages kept of one folder (the newest). */
+export const FOLDER_KEEP = 500;
+/** A folder's id in the API: shows nothing of its name. */
+export const folderKey = (account: string, path: string) => crypto.createHash("sha256").update(`folder\n${account}\n${path}`).digest("hex").slice(0, 16);
+
+/** Whether a folder message is kept already by its folder id. */
+export function isKeptInFolder(db: DB, account: string): (id: string) => boolean {
+  const has = db.prepare("SELECT 1 FROM folder_mail WHERE account = ? AND id = ?");
+  return (id) => !!has.get(account, id);
+}
+
+/**
+ * Keep one refresh of a mailbox's other folders, in one transaction: the folder list as it is now (a folder gone takes
+ * its mail with it), each folder's new mail, read flags, and what is no longer in it (or older than the listing's
+ * time) goes; then at most FOLDER_KEEP of each, the newest.
+ */
+export function keepFolders(db: DB, account: string, listings: FolderListing[]): { kept: number; gone: number } {
+  let kept = 0;
+  let gone = 0;
+  db.transaction(() => {
+    const paths = new Set(listings.map((l) => l.path));
+    for (const r of db.prepare("SELECT path FROM folders WHERE account = ?").all(account) as { path: string }[]) {
+      if (paths.has(r.path)) continue;
+      gone += db.prepare("DELETE FROM folder_mail WHERE account = ? AND folder = ?").run(account, r.path).changes;
+      db.prepare("DELETE FROM folders WHERE account = ? AND path = ?").run(account, r.path);
+    }
+    const saveFolder = db.prepare("INSERT INTO folders (account, path, key, role, more) VALUES (?, ?, ?, ?, ?) ON CONFLICT(account, path) DO UPDATE SET role = excluded.role, more = excluded.more");
+    const insert = db.prepare(`INSERT OR IGNORE INTO folder_mail (account, id, key, folder, message_id, at, from_name, from_address, to_list, reply_to, subject, text, automated, html, seen)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const mark = db.prepare("UPDATE folder_mail SET seen = ? WHERE account = ? AND id = ? AND seen != ?");
+    const del = db.prepare("DELETE FROM folder_mail WHERE account = ? AND id = ?");
+    for (const l of listings) {
+      saveFolder.run(account, l.path, folderKey(account, l.path), l.role, l.more ? 1 : 0);
+      const read = new Set(l.seen);
+      for (const m of l.mails) {
+        kept += insert.run(account, m.id, mailKey(account, m.id), l.path, m.message_id, m.at.toISOString(), m.from.name, m.from.address, JSON.stringify(m.to),
+          m.reply_to, m.subject, m.text, m.automated ? 1 : 0, m.html, read.has(m.id) ? 1 : 0).changes;
+      }
+      for (const id of l.present) { const v = read.has(id) ? 1 : 0; mark.run(v, account, id, v); }
+      const here = new Set(l.present);
+      for (const r of db.prepare("SELECT id FROM folder_mail WHERE account = ? AND folder = ?").all(account, l.path) as { id: string }[]) {
+        if (!here.has(r.id)) gone += del.run(account, r.id).changes;
+      }
+      gone += db.prepare("DELETE FROM folder_mail WHERE account = ? AND folder = ? AND key NOT IN (SELECT key FROM folder_mail WHERE account = ? AND folder = ? ORDER BY at DESC LIMIT ?)").run(account, l.path, account, l.path, FOLDER_KEEP).changes;
+    }
+  }).immediate();
+  if (gone) db.pragma("wal_checkpoint(TRUNCATE)");
+  return { kept, gone };
+}
+
+/** One folder on the Mail screen: its id, the mailbox it is in, its part, its name (for `own`), how many kept and unread. */
+export interface MailFolder { key: string; email: string; role: FolderRole; name: string; count: number; unread: number; more: boolean }
+const ROLE_ORDER: Record<string, number> = { drafts: 0, sent: 1, junk: 2, trash: 3, own: 4 };
+
+/** Every kept folder: Drafts, Sent, Junk, Trash, then the owner's own by name. */
+export function mailFolders(db: DB): MailFolder[] {
+  const rows = db.prepare("SELECT f.key, f.account, f.path, f.role, f.more, count(m.key) AS count, coalesce(sum(CASE WHEN m.seen = 0 THEN 1 ELSE 0 END), 0) AS unread FROM folders f LEFT JOIN folder_mail m ON m.account = f.account AND m.folder = f.path GROUP BY f.key").all() as { key: string; account: string; path: string; role: FolderRole; more: number; count: number; unread: number }[];
+  return rows
+    .map((r) => ({ key: r.key, email: r.account.slice(r.account.indexOf(":") + 1), role: r.role, name: r.path.split(/[/.]/).pop() || r.path, count: r.count, unread: r.unread, more: !!r.more }))
+    .sort((a, b) => (ROLE_ORDER[a.role] ?? 9) - (ROLE_ORDER[b.role] ?? 9) || a.name.localeCompare(b.name) || a.email.localeCompare(b.email));
+}
+
+type FolderRow = { key: string; at: string; from_name: string; from_address: string; to_list: string; reply_to: string | null; subject: string; text: string; automated: number; seen: number; role: FolderRole };
+const toList = (s: string): MailAddress[] => { try { return (JSON.parse(s) as MailAddress[]).filter((a) => a && typeof a.address === "string"); } catch { return []; } };
+export type FolderMailSummary = MailSummary & { to: MailAddress[]; folder_role: FolderRole };
+function folderSummary(r: FolderRow): FolderMailSummary {
+  return {
+    id: r.key, at: r.at, from: { name: r.from_name, address: r.from_address }, ...(r.reply_to ? { reply_to: r.reply_to } : {}),
+    to: toList(r.to_list), subject: r.subject, preview: previewOf(r.text), automated: !!r.automated, bundle: null, state: "folder", pinned: false, seen: !!r.seen,
+    folder_role: r.role, ...(r.role === "sent" || r.role === "drafts" ? { mine: true } : {}),
+  };
+}
+
+/** A folder's kept mail, newest first; null when there is no such folder. */
+export function folderMail(db: DB, key: string): FolderMailSummary[] | null {
+  const f = db.prepare("SELECT account, path, role FROM folders WHERE key = ?").get(key) as { account: string; path: string; role: FolderRole } | undefined;
+  if (!f) return null;
+  const rows = db.prepare("SELECT key, at, from_name, from_address, to_list, reply_to, subject, substr(text, 1, 3000) AS text, automated, seen FROM folder_mail WHERE account = ? AND folder = ? ORDER BY at DESC, key").all(f.account, f.path) as Omit<FolderRow, "role">[];
+  return rows.map((r) => folderSummary({ ...r, role: f.role }));
+}
+
+/** One folder message whole, as mailMessage gives Inbox mail; never with web pictures (none are fetched for folders). */
+function folderMessage(db: DB, key: string): MailMessage | null {
+  const r = db.prepare("SELECT m.key, m.at, m.from_name, m.from_address, m.to_list, m.reply_to, m.subject, m.text, m.automated, m.seen, m.html, f.role FROM folder_mail m JOIN folders f ON f.account = m.account AND f.path = m.folder WHERE m.key = ?").get(key) as (FolderRow & { html: string | null }) | undefined;
+  if (!r) return null;
+  const quote = quoteStart(r.text);
+  return { ...folderSummary(r), text: r.text, html: r.html ? mailDocument(withImages(r.html, [])) : null, pictures_pending: false, pictures_ask: false, ...(quote >= 0 ? { quote_at: quote } : {}) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1077,6 +1191,13 @@ export function refreshMail(hub: Hub, opts: { owner?: boolean } = {}, now: Date 
         if (found.sentAt) db.prepare("UPDATE mailboxes SET sent_at = ? WHERE account = ?").run(found.sentAt, account);
         if (r.kept || r.gone || found.more) console.log(`[mail-inbox] ${mailboxLabel(hub, account)}: ${r.kept} new, ${r.gone} left the Inbox${found.more ? ", more next time" : ""}`);
         out.mailboxes.push({ email, kept: r.kept, gone: r.gone, more: found.more });
+        // The other folders: after the Inbox, and a folder that cannot be read does not stop the Inbox's refresh.
+        if (source.listFolders) {
+          try {
+            const f = keepFolders(db, account, await source.listFolders(hub, account, since, isKeptInFolder(db, account)));
+            if (f.kept || f.gone) console.log(`[mail-inbox] ${mailboxLabel(hub, account)}: folders ${f.kept} new, ${f.gone} gone`);
+          } catch (e) { console.error(`[mail-inbox] ${mailboxLabel(hub, account)}: folders ${errCode(e)}`); }
+        }
       } catch (e) {
         // A StoreError's message is the hub's own (a source never passes on the server's words); anything else is not shown.
         const error = e instanceof StoreError ? e.message : "The mailbox could not be refreshed. The hub's log has the error code.";

@@ -5,7 +5,7 @@
 
 export interface MailAddress { name: string; address: string }
 /** `sent`: the owner's own reply, shown only inside its thread. */
-export type MailState = "inbox" | "snoozed" | "done" | "sent";
+export type MailState = "inbox" | "snoozed" | "done" | "sent" | "folder";
 /** One message in the list (GET /mail): no text, `preview` is its first words. `bundle`: the bundle the hub sorted it into. */
 export interface MailSummary {
   id: string; at: string; from: MailAddress; reply_to?: string; subject: string; preview: string;
@@ -288,13 +288,29 @@ export type MailDraftRequest = ({ reply_to: string } | { to: string; subject: st
 export interface MailGreeting { greeting: string; signoff: string; by: "model" | "plain" }
 /** What the hub saved to Drafts (or, for a preview, would save). */
 export interface MailDraft { saved: boolean; from: MailAddress; to: string[]; subject: string; text: string; in_reply_to?: string }
+/**
+ * The mailbox's other folders (GET /mail `folders`), kept on the hub like the Inbox and read-only: `role` is the part
+ * iCloud marks it for (`own`: one of the owner's), `name` its own name (shown for `own`).
+ */
+export type FolderRole = "drafts" | "sent" | "junk" | "trash" | "own";
+export interface MailFolder { key: string; email: string; role: FolderRole; name: string; count: number; unread: number; more: boolean }
+/** A folder's mail (GET /mail/folders/:key): `to` for what the owner wrote (Sent, Drafts). */
+export type FolderMail = MailSummary & { to: MailAddress[]; folder_role: FolderRole };
+const FOLDER_NAMES: Record<FolderRole, string> = { drafts: "Drafts", sent: "Sent", junk: "Spam", trash: "Trash", own: "" };
+export const FOLDER_ICONS: Record<FolderRole, string> = { drafts: "pencil", sent: "send", junk: "spam", trash: "trash", own: "folder" };
+/** A folder's name on the screen: Drafts, Sent, Spam (iCloud's Junk), Trash, or the owner's own; with its mailbox when several are linked. */
+export const folderLabel = (f: MailFolder, many = false) => `${FOLDER_NAMES[f.role] || f.name}${many ? ` (${f.email})` : ""}`;
+/** The number a folder shows in the list: its drafts, else its unread mail. */
+export const folderCount = (f: MailFolder) => (f.role === "drafts" ? f.count : f.role === "trash" || f.role === "sent" ? 0 : f.unread);
+/** Who a folder row names: those it went to for the owner's own (Sent, Drafts), else its sender. */
+export const folderWho = (m: FolderMail) => (m.folder_role === "sent" || m.folder_role === "drafts" ? `To: ${m.to.map(personLabel).join(", ") || "(no one yet)"}` : personLabel(m.from));
 /** `more`: the last refresh left new mail for the next one (a big Inbox comes in batches). */
 export interface MailMailbox { email: string; last_refresh: string | null; last_error: string | null; more: boolean }
 /** What Done or Undo did: the mails moved, how many were not, and the hub's words when some were not. */
 export interface MailMoved { moved: string[]; failed: number; error?: string }
 
 /** `logos`: the verified brand logos the messages use, by domain (a message's `logo_domain`). */
-export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify }
+export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify; folders?: MailFolder[] }
 
 /** Which new mail notifies (mail from people; bundles switched on, while they show as mail arrives) and what it says. */
 export interface MailNotify { people: boolean; bundles: string[]; detail: "full" | "sender" | "count" }
@@ -375,7 +391,7 @@ export function bundleOf(m: Pick<MailSummary, "bundle">, shown: Bundle[]): Bundl
 // The list
 
 /** What the screen shows: the Inbox, Snoozed, Done, or one bundle (`b:<id>`). */
-export type MailView = "inbox" | "snoozed" | "done" | `b:${string}`;
+export type MailView = "inbox" | "snoozed" | "done" | `b:${string}` | `f:${string}`;
 
 const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const daysBefore = (iso: string, now: Date) => Math.round((startOfDay(now).getTime() - startOfDay(new Date(iso)).getTime()) / 86_400_000);

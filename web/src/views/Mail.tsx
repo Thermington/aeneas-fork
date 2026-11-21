@@ -22,6 +22,12 @@ import {
   cardLink,
   type MailCard,
   type MailDraft,
+  type FolderMail,
+  type MailFolder,
+  FOLDER_ICONS,
+  folderCount,
+  folderLabel,
+  folderWho,
   bundleOf,
   deliveryAt,
   dueReminders,
@@ -163,8 +169,9 @@ export function Mail() {
   };
   const toggleBundle = (id: string) => setOpenBundles((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const here = view.startsWith("b:") ? shown.find((b) => b.id === view.slice(2)) : null;
-  const title = here?.name ?? (view === "snoozed" ? "Snoozed" : view === "done" ? "Done" : "Inbox");
-  const barClass = here ? bundleClass(here) : `v-${view}`;
+  const folder = view.startsWith("f:") ? list.data?.folders?.find((f) => f.key === view.slice(2)) : undefined;
+  const title = folder ? folderLabel(folder) : here?.name ?? (view === "snoozed" ? "Snoozed" : view === "done" ? "Done" : "Inbox");
+  const barClass = folder ? "v-folder" : here ? bundleClass(here) : `v-${view}`;
   const [actErr, setActErr] = useState("");
   // The last Done or Sweep, for its Undo bar (gone after a few seconds, or with the next one).
   const [undo, setUndo] = useState<{ text: string; run: () => Promise<void> } | null>(null);
@@ -383,6 +390,8 @@ export function Mail() {
           <Nav view="inbox" current={view} go={go} icon="inbox" label="Inbox" count={threads.filter((m) => m.state === "inbox" && isUnread(m) && inboxAt(m, delivery)).length} />
           <Nav view="snoozed" current={view} go={go} icon="clock" label="Snoozed" count={threads.filter((m) => m.state === "snoozed").length} />
           <Nav view="done" current={view} go={go} icon="check" label="Done" />
+          {/* The other folders, between Done and the bundles: Drafts, Sent, Spam, Trash, then the owner's own. */}
+          {(list.data?.folders ?? []).map((f) => <FolderNav key={f.key} f={f} current={view} go={go} many={(list.data?.mailboxes.length ?? 0) > 1} />)}
           <div className="mailx-label">Bundles</div>
           {shown.filter((b) => !b.module && b.custom === undefined).map((b) => <BundleNav key={b.id} b={b} current={view} go={(v) => { setEditing(null); go(v); }} threads={threads} />)}
           {shown.some((b) => b.module) && <div className="mailx-label">From your modules</div>}
@@ -417,6 +426,8 @@ export function Mail() {
             : editing
               ? <BundleForm key={editing === "new" ? "new" : editing.id} start={editing === "new" ? null : editing} close={() => setEditing(null)}
                   saved={async (id) => { setEditing(null); await list.reload(); if (id) go(`b:${id}` as MailView); else go("inbox"); }} />
+            : folder
+              ? <FolderView key={folder.key} f={folder} q={q} stamp={list.data} open={open} setOpen={setOpen} />
             : view === "inbox"
               ? <InboxList reminders={pinnedOnly || q.trim() ? [] : reminders} tasks={tasks} remindFor={remindFor} setRemindFor={setRemindFor} messages={messages} shown={shown} delivery={delivery} pinnedOnly={pinnedOnly} open={open} setOpen={setOpen} openBundles={openBundles} toggleBundle={toggleBundle} searching={!!q.trim()} waiting={!list.data.mailboxes.some((m) => m.last_refresh)} />
               : <Flat messages={viewMessages(messages, view, shown)} view={view} bundle={here ?? null} open={open} setOpen={setOpen}
@@ -434,6 +445,78 @@ function Nav({ view, current, go, icon, label, count }: { view: MailView; curren
     <button type="button" className={`mailx-nav v-${view}`} aria-current={current === view ? "page" : undefined} onClick={() => go(view)}>
       <span className="ico"><Icon name={icon} /></span>{label}{!!count && <span className="n">{count}</span>}
     </button>
+  );
+}
+
+/** A folder in the side list: its icon, its name, and its drafts or unread mail. */
+function FolderNav({ f, current, go, many }: { f: MailFolder; current: MailView; go: (v: MailView) => void; many: boolean }) {
+  const view = `f:${f.key}` as MailView;
+  const n = folderCount(f);
+  return (
+    <button type="button" className="mailx-nav v-folder" aria-current={current === view ? "page" : undefined} onClick={() => go(view)}>
+      <span className="ico"><Icon name={FOLDER_ICONS[f.role]} /></span>{folderLabel(f, many)}{!!n && <span className="n">{n}</span>}
+    </button>
+  );
+}
+
+/**
+ * One of the other folders: its kept mail, newest first, each opening as in the Inbox (its own words, the page as sent
+ * without web pictures). Read-only: nothing here moves, marks or changes mail. Fetched again with each list (`stamp`).
+ */
+function FolderView({ f, q, stamp, open, setOpen }: { f: MailFolder; q: string; stamp: unknown; open: string | null; setOpen: (id: string | null) => void }) {
+  const [mails, setMails] = useState<FolderMail[] | null>(null);
+  const [err, setErr] = useState("");
+  const [shown, setShown] = useState(100);
+  useEffect(() => {
+    let live = true;
+    engine.client?.mailFolder(f.key).then((r) => { if (live) { setMails(r.messages); setErr(""); } }).catch((e) => { if (live) setErr(plainError(e)); });
+    return () => { live = false; };
+  }, [f.key, stamp]);
+  if (err) return <div className="error">{err}</div>;
+  if (!mails) return <div className="muted small">Loading</div>;
+  const hits = q.trim() ? mails.filter((m) => matches(m, q)) : mails;
+  if (!hits.length) return <Empty title={q.trim() ? "No mail matches" : `Nothing in ${folderLabel(f)}`} text={f.role === "junk" ? "Mail iCloud takes for spam gathers here." : "Mail in this folder in iCloud shows here."} />;
+  return (
+    <div className="mailx-col">
+      {f.role === "junk" && <div className="muted small mailx-folder-note">iCloud put this mail in Spam. Its pictures are never loaded, and its links may not be safe.</div>}
+      {f.role === "drafts" && <div className="muted small mailx-folder-note">Send or change a draft in Apple Mail.</div>}
+      <div className="mailx-list">
+        {hits.slice(0, shown).map((m) => open === m.id
+          ? <FolderCard key={m.id} m={m} close={() => setOpen(null)} />
+          : (
+            <div key={m.id} className="mailx-item">
+              <button type="button" className={`mailx-row${m.seen ? "" : " unread"}`} onClick={() => setOpen(m.id)}>
+                <span className="mailx-dotcol">{!m.seen && <span className="mailx-dot" title="Unread" />}</span>
+                <span className="mailx-av" aria-hidden="true">{initials(m.folder_role === "sent" || m.folder_role === "drafts" ? m.to[0] ?? m.from : m.from)}</span>
+                <span className="mailx-what">
+                  <span className="who"><b>{folderWho(m)}</b></span>
+                  <span className="line"><span className="subj">{m.subject || "(no subject)"}</span>{m.preview && <> · {m.preview}</>}</span>
+                </span>
+                <span className="when">{whenLabel(m.at)}</span>
+              </button>
+            </div>
+          ))}
+      </div>
+      {hits.length > shown && <button type="button" className="mailx-more" onClick={() => setShown((n) => n + 100)}>Show more ({hits.length - shown})</button>}
+    </div>
+  );
+}
+
+/** A folder's mail open: its sender (and for what the owner wrote, who it went to), then the message as in the Inbox. */
+function FolderCard({ m, close }: { m: FolderMail; close: () => void }) {
+  const mine = m.folder_role === "sent" || m.folder_role === "drafts";
+  return (
+    <article className="mailx-card">
+      <button type="button" className="mailx-card-head" onClick={close} aria-expanded="true">
+        <span className="mailx-av" aria-hidden="true">{initials(mine ? m.to[0] ?? m.from : m.from)}</span>
+        <span className="mailx-what">
+          <span className="subject">{m.subject || "(no subject)"}</span>
+          <span className="meta">{mine ? <>To {m.to.map((a) => `${personLabel(a)} <${a.address}>`).join(", ") || "no one yet"}</> : <><b>{personLabel(m.from)}</b> &lt;{m.from.address}&gt;</>} · {fmtDateTime(m.at)}</span>
+        </span>
+      </button>
+      {m.folder_role === "junk" && <div className="warn small mailx-card-pad">This mail is in Spam. Be careful with its links, and never sign in or pay through them.</div>}
+      <Message m={m} />
+    </article>
   );
 }
 
@@ -1349,6 +1432,10 @@ const ICONS: Record<string, string> = {
   plus: "M12 5v14M5 12h14",
   pencil: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
   reply: "M9 15l-5-5 5-5M4 10h10a6 6 0 0 1 6 6v3",
+  send: "M4 12l16-8-6 16-3-7zM11 13l9-9",
+  spam: "M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6zM12 8v5M12 16v.5",
+  trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",
+  folder: "M3 6h6l2 2h10v11H3z",
   own: "M7 4h10v16l-5-4-5 4z",
   dot: "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z",
   pin: "M9 4h6l-1 6 3 3H7l3-3zM12 13v7",

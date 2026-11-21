@@ -665,6 +665,66 @@ export async function originalICloud(hub: Hub, accountKey: string, id: string): 
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// The Mail screen's other folders (since 2026-11-20): Drafts, Sent, Junk, Trash and the owner's own, read-only
+
+/** A folder's part on the Mail screen, by the mark iCloud gives it (in any language); `own` for the owner's folders. */
+export type FolderRole = "drafts" | "sent" | "junk" | "trash" | "own";
+const ROLES: Record<string, FolderRole> = { "\\Drafts": "drafts", "\\Sent": "sent", "\\Junk": "junk", "\\Trash": "trash" };
+/** At most this many folders, and this many new messages of one folder a refresh. */
+export const FOLDERS_MAX = 30;
+export const FOLDER_NEW_MAX = 50;
+/** One folder of one refresh: what is in it since the time asked, what of that is read, and its new mail. */
+export interface FolderListing { path: string; role: FolderRole; present: string[]; seen: string[]; mails: (InboxMail & { to: MailAddress[] })[]; more: boolean }
+
+/** The folders the Mail screen shows besides the Inbox: not the Inbox, not Archive (Done shows it), not iCloud's virtual ones. */
+export function shownFolders(folders: ImapFolder[]): { path: string; role: FolderRole }[] {
+  return folders
+    .filter((f) => !f.flags.has("\\Noselect") && !f.flags.has("\\NonExistent") && f.path.toUpperCase() !== "INBOX" && !["\\Archive", "\\All", "\\Flagged", "\\Important"].includes(f.specialUse ?? ""))
+    .map((f) => ({ path: f.path, role: ROLES[f.specialUse ?? ""] ?? "own" }))
+    .slice(0, FOLDERS_MAX);
+}
+
+/**
+ * The Mail screen's refresh of a mailbox's other folders, in one connection, read-only like the Inbox (EXAMINE,
+ * BODY.PEEK: nothing marked read): each folder's messages since `since`, their read flags, and the new ones' text and
+ * HTML (FOLDER_NEW_MAX a folder, newest first). Their web pictures are never fetched: Sent and Drafts are the owner's
+ * own (fetching them again tells the people they wrote to), and Junk's would tell a spammer the address is read.
+ */
+export async function listFoldersICloud(hub: Hub, accountKey: string, since: Date, known: (id: string) => boolean): Promise<FolderListing[]> {
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  const out: FolderListing[] = [];
+  await withClient({ user: a.email, pass: a.password }, DEADLINES.list, async (c) => {
+    for (const f of shownFolders(await c.list())) {
+      const box = await c.mailboxOpen(f.path, { readOnly: true });
+      const id = (uid: number) => messageId(box.uidValidity, uid, f.path);
+      const uids = ((await c.search({ since }, { uid: true })) || []);
+      const here = new Set(uids);
+      const read: number[] = [];
+      if (c.fetch && uids.length) for await (const m of c.fetch("1:*", { uid: true, flags: true }, { uid: true })) if (here.has(m.uid) && m.flags?.has("\\Seen")) read.push(m.uid);
+      const fresh = uids.filter((u) => !known(id(u))).sort((x, y) => y - x);
+      const mails: FolderListing["mails"] = [];
+      for (const uid of fresh.slice(0, FOLDER_NEW_MAX)) {
+        const msg = await c.fetchOne(String(uid), { envelope: true, bodyStructure: true, internalDate: true, headers: INBOX_HEADERS }, { uid: true });
+        if (!msg) continue;
+        const { plain, html } = await downloadText(c, String(uid), msg);
+        let text: string;
+        try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
+        const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html));
+        m.remote = [];
+        mails.push({ ...m, to: (msg.envelope?.to ?? []).slice(0, 20).map(mailAddress).filter((x) => x.address) });
+      }
+      out.push({ path: f.path, role: f.role, present: uids.map(id), seen: read.map(id), mails, more: fresh.length > FOLDER_NEW_MAX });
+    }
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The Mail screen's one write: Done (Inbox to Archive) and its Undo (Archive to Inbox)
 
 
@@ -804,4 +864,5 @@ export const icloudInbox: InboxSource = {
   move: (hub, account, refs, to) => moveICloud(hub, account, refs, to),
   setSeen: (hub, account, refs, seen) => setSeenICloud(hub, account, refs, seen),
   saveDraft: (hub, account, raw) => saveDraftICloud(hub, account, raw),
+  listFolders: (hub, account, since, known) => listFoldersICloud(hub, account, since, known),
 };

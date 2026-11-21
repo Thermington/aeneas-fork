@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -386,5 +386,21 @@ describe("mail trips", () => {
   it("ignores cards without a date, and cards read from text", () => {
     const conf = mail("conf", [{ kind: "booking", source: "text", number: "X7K2PQ" }]);
     expect(tripsOf([out, conf], now)).toEqual([]);
+  });
+});
+
+describe("mail folders", () => {
+  const f = (role: MailFolder["role"], name = "x", count = 3, unread = 2): MailFolder => ({ key: "k", email: "robin@icloud.example", role, name, count, unread, more: false });
+  it("names iCloud's folders as the screen does (Junk is Spam), and the owner's by their own name", () => {
+    expect([f("drafts"), f("sent"), f("junk"), f("trash"), f("own", "Taxes")].map((x) => folderLabel(x))).toEqual(["Drafts", "Sent", "Spam", "Trash", "Taxes"]);
+    expect(folderLabel(f("sent"), true)).toBe("Sent (robin@icloud.example)");
+  });
+  it("counts drafts, and unread mail where it matters (not in Sent or Trash)", () => {
+    expect([f("drafts"), f("sent"), f("junk"), f("trash"), f("own")].map(folderCount)).toEqual([3, 0, 2, 0, 2]);
+  });
+  it("names who the owner wrote to for Sent and Drafts, else the sender", () => {
+    const m = (folder_role: MailFolder["role"]): FolderMail => ({ id: "1", at: "2026-11-20T10:00:00Z", from: { name: "Robin", address: "robin@icloud.example" }, to: [{ name: "Alex", address: "alex@example.com" }, { name: "", address: "sam@example.com" }], subject: "Hi", preview: "", automated: false, bundle: null, state: "folder", pinned: false, folder_role });
+    expect(folderWho(m("sent"))).toBe("To: Alex, sam@example.com");
+    expect(folderWho(m("junk"))).toBe("Robin");
   });
 });

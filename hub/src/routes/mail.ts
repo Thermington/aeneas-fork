@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { bundleDelivery, listMail, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { bundleDelivery, folderMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -15,7 +15,7 @@ export function mailRoutes() {
   r.get("/mail", (c) => {
     const hub = c.get("hub");
     wakeSnoozed(hub);
-    return c.json({ messages: listMail(hub.mailDb, bundleContext(hub)), logos: mailLogos(hub.mailDb), mailboxes: mailboxStates(hub), snooze_times: snoozeTimes(hub.mailDb), bundle_delivery: bundleDelivery(hub.mailDb), custom_bundles: customBundles(hub.mailDb), mail_notify: mailNotify(hub.mailDb) });
+    return c.json({ messages: listMail(hub.mailDb, bundleContext(hub)), logos: mailLogos(hub.mailDb), mailboxes: mailboxStates(hub), snooze_times: snoozeTimes(hub.mailDb), bundle_delivery: bundleDelivery(hub.mailDb), custom_bundles: customBundles(hub.mailDb), mail_notify: mailNotify(hub.mailDb), folders: mailFolders(hub.mailDb) });
   });
 
   // The owner's snooze times (what "Tomorrow" and the rest mean).
@@ -50,6 +50,13 @@ export function mailRoutes() {
 
   // Show pictures, on a hub without Tor: this one mail's web pictures, fetched straight from the hub because the person
   // asked (its sender then sees the home's internet address). A hub with Tor fetches them itself and refuses this.
+  // A folder's kept mail (Drafts, Sent, Junk, Trash, the owner's own), newest first; read-only.
+  r.get("/mail/folders/:key", (c) => {
+    const messages = folderMail(c.get("hub").mailDb, c.req.param("key"));
+    if (!messages) throw new StoreError(404, "there is no such folder");
+    return c.json({ messages });
+  });
+
   r.post("/mail/messages/:id/pictures", async (c) => {
     const m = await showPictures(c.get("hub"), c.req.param("id"));
     if (!m) throw new StoreError(404, "that message is not kept (it left the Inbox)");

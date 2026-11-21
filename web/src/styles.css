@@ -1688,3 +1688,8 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-around textarea { flex: 1; min-height: 0; resize: none; font: inherit; color: var(--muted); background: transparent; border-style: dashed; }
 .mailx-around textarea:focus { color: var(--text); border-style: solid; }
 .mailx-around-add { align-self: flex-start; }
+/* The other folders (Drafts, Sent, Spam, Trash, your own): Other's gray, as plain mail places, not a kind of mail. */
+.mailx-bar.v-folder { --barc: var(--b-other); }
+.mailx-nav.v-folder { --c: var(--b-other); --ct: var(--bt-other); }
+.mailx-folder-note { margin: 0 0 8px 4px; }
+.mailx-more { align-self: center; margin-top: 10px; }
