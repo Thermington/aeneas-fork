@@ -20,6 +20,7 @@ import { fetchBytesViaTor, fetchPublicBytes, postOneClick, TorDown } from "./ai/
 import { StoreError } from "./store.js";
 import { textCards, type MailCard } from "./mail-cards.js";
 import { blockedForm, isBlocked, unsubscribeWays } from "./mail-unsubscribe.js";
+import { readTriage, TRIAGE_BATCH, TRIAGE_DAYS, TRIAGE_SYSTEM, triagePrompt, type Triage } from "./mail-triage.js";
 import { assembled, buildMessage, checkedFiles, checkedLine, checkedNew, checkedText, DRAFT_TEXT_MAX, FILES_BYTES, FILES_MAX, forwardQuote, forwardSubject, replyAllCc, type DraftFile, GREETING_SYSTEM, greetingPrompt, plainGreeting, readSuggestion, replyFields } from "./mail-compose.js";
 import { withPriority } from "./ai/backends.js";
 
@@ -130,6 +131,9 @@ export function openMailDb(dbPath: string): DB {
   if (!inboxCols.includes("cards")) db.exec("ALTER TABLE inbox ADD COLUMN cards TEXT");
   // Attachments (since 2026-11-21): mail kept before has none listed (NULL) until it is opened.
   if (!inboxCols.includes("attachments")) db.exec("ALTER TABLE inbox ADD COLUMN attachments TEXT");
+  // Triage (since 2026-11-21): the model's urgency, summary and needs-reply, kept TRIAGE_DAYS from triaged_at.
+  if (!inboxCols.includes("triage")) db.exec("ALTER TABLE inbox ADD COLUMN triage TEXT");
+  if (!inboxCols.includes("triaged_at")) db.exec("ALTER TABLE inbox ADD COLUMN triaged_at TEXT");
   if (!(db.prepare("PRAGMA table_info(folder_mail)").all() as { name: string }[]).some((c) => c.name === "attachments")) db.exec("ALTER TABLE folder_mail ADD COLUMN attachments TEXT");
   return db;
 }
@@ -346,6 +350,8 @@ export interface MailSummary {
   thread?: string;
   /** The owner's own reply (state `sent`). */
   mine?: boolean;
+  /** The local model's triage (mail-triage.ts): how soon it matters, what it is, whether it needs a reply; kept 7 days. */
+  triage?: Triage;
   /** How many attachments it has (the row's paperclip), absent when none, null when not known yet (kept before 2026-11-21: clients ask once, on opening it). */
   attachments?: number | null;
   /** Its key facts (mail-cards.ts): a package, a flight, a bill; absent when it has none. */
@@ -362,7 +368,7 @@ export interface MailMessage extends MailSummary {
   quote_at?: number;
 }
 
-type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number; cards?: string | null; attachments?: string | null };
+type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number; cards?: string | null; attachments?: string | null; triage?: string | null };
 
 /**
  * A message's cards: those stored at refresh (from the sender's data, or its text); for mail kept before cards (NULL),
@@ -387,6 +393,9 @@ export const previewOf = (text: string) => ownWords(text.slice(0, PREVIEW_READ))
   .replace(/(https?:\/\/|www\.)[^\s)]+/gi, "")
   .replace(/\s+/g, " ").replace(/\s+([.,;:!?])/g, "$1").trim().slice(0, 200);
 
+/** A kept triage, or null (none, or one the hub cannot read). */
+const triageOf = (s: string | null | undefined): Triage | null => { try { return s ? readTriage(s) : null; } catch { return null; } };
+
 /** How many attachments a kept list holds (0 when none or not known). */
 const attachmentCount = (s: string | null | undefined): number => { try { return s ? (JSON.parse(s) as unknown[]).length : 0; } catch { return 0; } };
 
@@ -402,6 +411,7 @@ function summary(r: Row): MailSummary {
     ...(r.thread ? { thread: r.thread } : {}),
     ...(r.mine ? { mine: true } : {}),
     ...(r.attachments == null ? { attachments: null } : attachmentCount(r.attachments) ? { attachments: attachmentCount(r.attachments) } : {}),
+    ...(triageOf(r.triage) ? { triage: triageOf(r.triage)! } : {}),
   };
   const cards = cardsOf(r);
   return cards.length ? { ...s, cards } : s;
@@ -415,7 +425,7 @@ export const LIST_MAX = 5000;
  * the screen sorts it into Inbox, Snoozed, Done and the bundles.
  */
 export function listMail(db: DB, ctx: BundleContext = NO_MODULES): MailSummary[] {
-  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
+  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments, triage FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
   return rows.map((r) => ({
     ...summary(r),
     bundle: bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx),
@@ -1030,6 +1040,52 @@ export function unblockSender(db: DB, sender: unknown): string[] {
   return blockedSenders(db);
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Triage (since 2026-11-21)
+
+/** Whether triage is on (the owner's switch, on unless turned off). */
+export const triageOn = (db: DB) => (db.prepare("SELECT value FROM settings WHERE key = 'mail_triage'").get() as { value: string } | undefined)?.value !== "off";
+
+/** Triage on or off; off also erases every kept triage. */
+export function setTriage(db: DB, on: boolean): boolean {
+  db.prepare("INSERT INTO settings (key, value) VALUES ('mail_triage', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(on ? "on" : "off");
+  if (!on && db.prepare("UPDATE inbox SET triage = NULL, triaged_at = NULL WHERE triage IS NOT NULL").run().changes) db.pragma("wal_checkpoint(TRUNCATE)");
+  return on;
+}
+
+const triaging = new WeakMap<Hub, Promise<number>>();
+
+/**
+ * Triage new Inbox mail (received, of the last TRIAGE_DAYS, not triaged yet), newest first, at most TRIAGE_BATCH a run,
+ * with the local model in the background (it gives way to a chat, and waits while a game has the card). One run at a
+ * time. Stops at the first mail the model does not answer (it is tried at the next run); an answer it cannot read is
+ * kept as fyi so it is not asked again.
+ */
+export function triageNew(hub: Hub, now = new Date()): Promise<number> {
+  const busy = triaging.get(hub);
+  if (busy) return busy;
+  const run = (async () => {
+    const db = hub.mailDb;
+    if (!triageOn(db)) return 0;
+    const name = hub.profile.get().name.trim();
+    const owner = name && name !== "the owner" ? name : "the owner";
+    const since = new Date(now.getTime() - TRIAGE_DAYS * DAY_MS).toISOString();
+    const rows = db.prepare("SELECT key, from_name, from_address, subject, text FROM inbox WHERE state = 'inbox' AND mine = 0 AND triage IS NULL AND at >= ? ORDER BY at DESC LIMIT ?").all(since, TRIAGE_BATCH) as { key: string; from_name: string; from_address: string; subject: string; text: string }[];
+    const save = db.prepare("UPDATE inbox SET triage = ?, triaged_at = ? WHERE key = ?");
+    let done = 0;
+    for (const r of rows) {
+      const { text, stopped } = await hub.ai.backgroundJson("mail-triage", TRIAGE_SYSTEM.replaceAll("{{owner}}", owner), triagePrompt({ ...r, text: ownWords(r.text.slice(0, 6000)) }));
+      if (stopped || text === null) break;
+      save.run(JSON.stringify(readTriage(text)), new Date().toISOString(), r.key);
+      done++;
+    }
+    if (done) console.log(`[mail-inbox] triage: ${done} mails`);
+    return done;
+  })().finally(() => triaging.delete(hub));
+  triaging.set(hub, run);
+  return run;
+}
+
 /**
  * Pins made before pins were kept as flags (2026-11-21): flagged in the mailbox once, before the first refresh that reads
  * the flags, so that refresh does not take them away. Marked done per mailbox in `settings` (`pins_flagged:<account>`).
@@ -1582,6 +1638,9 @@ export function refreshMail(hub: Hub, opts: { owner?: boolean } = {}, now: Date 
       }
     }
     try { notifyNewMail(hub, arrived, now); } catch (e) { console.error(`[mail-inbox] notify ${errCode(e)}`); }
+    // Triage: a summary is kept TRIAGE_DAYS; then the new mail is triaged in the background.
+    if (db.prepare("UPDATE inbox SET triage = NULL, triaged_at = NULL WHERE triaged_at < ?").run(new Date(now.getTime() - TRIAGE_DAYS * DAY_MS).toISOString()).changes) db.pragma("wal_checkpoint(TRUNCATE)");
+    void triageNew(hub, now).catch((e) => console.error(`[mail-inbox] triage ${errCode(e)}`));
     // The new mail's web pictures, in the background (the Refresh button does not wait for them).
     void fetchMailImages(hub).catch((e) => console.error(`[mail-inbox] pictures: ${errCode(e)}`));
     return out;

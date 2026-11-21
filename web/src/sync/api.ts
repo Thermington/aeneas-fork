@@ -1039,6 +1039,10 @@ export class HubClient {
   mailUnsubscribe(id: string, how: "one_click" | "mailto", direct = false) {
     return this.req<{ ok: boolean; via?: "tor" | "direct"; draft?: boolean }>("POST", `/mail/messages/${encodeURIComponent(id)}/unsubscribe`, { how, ...(direct ? { direct: true } : {}) });
   }
+  /** Triage on or off (off erases every kept triage). */
+  mailTriage(on: boolean) {
+    return this.req<{ triage: boolean }>("PUT", "/mail/settings/triage", { on });
+  }
   /** Block or unblock a sender: an address, or @domain. */
   mailBlock(sender: string) {
     return this.req<{ blocked: string[]; moved: number }>("POST", "/mail/settings/blocked", { sender });

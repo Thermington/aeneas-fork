@@ -23,6 +23,7 @@ import {
   cardLink,
   type MailCard,
   type SearchHit,
+  needsYou,
   type UnsubscribeOptions,
   httpsLink,
   type MailAddress,
@@ -706,10 +707,22 @@ function Mailboxes({ data, showKeys }: { data: MailList; showKeys: () => void })
           ))}
           <div className="muted">Opening a mail marks it read in iCloud too, and Pin flags it there (a flag in Apple Mail pins it here); Done moves it to Archive there, and Undo moves it back.</div>
           <NotifySettings />
+          <TriageSwitch on={data.triage !== false} />
           <BlockedList blocked={data.blocked ?? []} />
         </div>
       )}
     </div>
+  );
+}
+
+/** Triage on or off: the hub's model sorting new mail for the Needs you digest; off erases every summary it made. */
+function TriageSwitch({ on }: { on: boolean }) {
+  const { act } = useContext(Look);
+  return (
+    <label className="mailx-check">
+      <input type="checkbox" checked={on} onChange={(e) => void act((c) => c.mailTriage(e.target.checked))} />
+      <span>Sort new mail with your hub's model (Needs you). Its one-line summaries are kept a week; turning this off erases them.</span>
+    </label>
   );
 }
 
@@ -740,8 +753,22 @@ function InboxList({ reminders, tasks, remindFor, setRemindFor, messages, shown,
     if (waiting) return <div className="empty">Your Inbox arrives with the first refresh, a minute or so after the hub starts. Refresh brings it now.</div>;
     return <Empty title={pinnedOnly ? "No pinned mail" : "You're all done"} text={pinnedOnly ? "Pinned mail stays here." : "Nothing left in your Inbox."} />;
   }
+  // The model's digest: what needs the owner today, or a reply (not while searching or showing pinned mail only).
+  const needs = searching || pinnedOnly ? [] : needsYou(messages);
   return (
     <div className="mailx-col">
+      {!!needs.length && (
+        <section className="mailx-needs" aria-label="Needs you">
+          <h2>Needs you</h2>
+          {needs.map((m) => (
+            <button key={m.id} type="button" className="mailx-need" onClick={() => setOpen(m.id)}>
+              <span className="who"><b>{m.people}</b>{m.triage?.urgency === "today" && <span className="chip">Today</span>}{m.triage?.needs_reply && <span className="chip">Reply</span>}</span>
+              <span className="line">{m.triage?.summary ?? m.subject}</span>
+            </button>
+          ))}
+          <span className="muted small">Sorted by your hub's model from each mail's own words. It can be wrong.</span>
+        </section>
+      )}
       {sections.map((s, i) => (
         <section key={s.title} className="mailx-group">
           <h2>{s.title}<Sweep mails={s.rows.flatMap((r) => (r.kind === "mail" ? [r.mail] : r.mails))} /></h2>
@@ -1057,7 +1084,7 @@ function Row({ m, open, setOpen }: { m: MailThread; open: boolean; setOpen: (id:
         <span className="mailx-dotcol">{isUnread(m) && <span className="mailx-dot" title="Unread" />}</span>
         <Avatar m={m} />
         <span className="mailx-what">
-          <span className="who"><b>{m.people}</b>{m.pinned && <span className="pinmark" title="Pinned"><Icon name="pin" /></span>}{!!m.attachments && <span className="clipmark" title={m.attachments === 1 ? "An attachment" : `${m.attachments} attachments`}><Icon name="clip" /></span>}</span>
+          <span className="who"><b>{m.people}</b>{m.pinned && <span className="pinmark" title="Pinned"><Icon name="pin" /></span>}{!!m.attachments && <span className="clipmark" title={m.attachments === 1 ? "An attachment" : `${m.attachments} attachments`}><Icon name="clip" /></span>}{m.triage?.needs_reply && m.state === "inbox" && <span className="replymark" title="Your hub's model thinks this needs a reply">Reply?</span>}</span>
           <span className="line"><span className="subj">{m.subject || "(no subject)"}</span>{m.preview && <> · {m.preview}</>}</span>
           {/* Its first card's facts, as text (the row is a button: Track is on the open mail). */}
           {m.cards?.[0] && <span className={`mailx-cardline b-${CARD_ICON[m.cards[0].kind]}`}><Icon name={CARD_ICON[m.cards[0].kind]} />{cardLine(m.cards[0])}</span>}

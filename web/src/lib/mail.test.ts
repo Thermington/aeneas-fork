@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, needsYou, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -437,5 +437,21 @@ describe("mail search hits", () => {
     expect(whereLabel({ where: "sent", state: "sent" })).toBe("Your reply");
     expect(whereLabel({ where: "sent", state: "folder" })).toBe("Sent");
     expect(whereLabel({ where: "own", folder_name: "Taxes", state: "folder" })).toBe("Taxes");
+  });
+});
+
+describe("mail triage digest", () => {
+  const m = (id: string, at: string, triage?: MailSummary["triage"], state: MailSummary["state"] = "inbox"): MailSummary => ({ id, at, from: { name: "", address: "a@x.example" }, subject: id, preview: "", automated: false, bundle: null, state, pinned: false, ...(triage ? { triage } : {}) });
+  it("today's first, then those needing a reply, never done or untriaged mail, at most 5", () => {
+    const list = [
+      m("reply-old", "2026-11-19T10:00:00Z", { urgency: "soon", needs_reply: true }),
+      m("today", "2026-11-18T10:00:00Z", { urgency: "today", needs_reply: false }),
+      m("reply-new", "2026-11-20T10:00:00Z", { urgency: "fyi", needs_reply: true }),
+      m("low", "2026-11-20T11:00:00Z", { urgency: "low", needs_reply: false }),
+      m("done", "2026-11-20T12:00:00Z", { urgency: "today", needs_reply: true }, "done"),
+      m("plain", "2026-11-20T13:00:00Z"),
+    ];
+    expect(needsYou(list).map((x) => x.id)).toEqual(["today", "reply-new", "reply-old"]);
+    expect(needsYou(Array.from({ length: 9 }, (_, i) => m(`t${i}`, `2026-11-2${i % 9}T10:00:00Z`, { urgency: "today", needs_reply: false })))).toHaveLength(5);
   });
 });

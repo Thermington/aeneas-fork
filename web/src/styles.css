@@ -1762,3 +1762,12 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 /* Blocked senders in the info panel. */
 .mailx-blocked { display: flex; flex-direction: column; gap: 4px; }
 .mailx-blocked .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* The model's Needs you digest at the top of the Inbox, and the Reply? mark on rows. */
+.mailx-needs { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin-bottom: 12px; background: var(--mail-item); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); }
+.mailx-needs h2 { margin: 0 0 4px; font-size: 15px; }
+.mailx-need { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 6px 8px; min-height: 0; }
+.mailx-need:hover { background: var(--mail-hover); }
+.mailx-need .who { display: flex; align-items: center; gap: 6px; }
+.mailx-need .chip { min-height: 0; padding: 1px 7px; line-height: 16px; }
+.mailx-need .line { color: var(--muted); font-size: 14px; }
+.replymark { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 0 5px; flex: none; }

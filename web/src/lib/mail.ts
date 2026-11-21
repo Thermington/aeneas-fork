@@ -18,6 +18,8 @@ export interface MailSummary {
   seen?: boolean;
   /** Its thread: messages with the same one show as one row. */
   thread?: string;
+  /** The local model's triage (kept a week): how soon it matters, what it is in a line, whether it needs a reply. */
+  triage?: { urgency: "today" | "soon" | "fyi" | "low"; summary?: string; needs_reply: boolean };
   /** How many attachments (the row's paperclip): absent when none, null when not known yet (ask once, on opening). */
   attachments?: number | null;
   /** The owner's own reply (from Sent). */
@@ -325,7 +327,7 @@ export type MoveTarget = "inbox" | "trash" | "junk" | string;
 export interface MailMovedTo extends MailMoved { to: Record<string, string> }
 
 /** `logos`: the verified brand logos the messages use, by domain (a message's `logo_domain`). */
-export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify; folders?: MailFolder[]; blocked?: string[] }
+export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify; folders?: MailFolder[]; blocked?: string[]; triage?: boolean }
 
 /** Which new mail notifies (mail from people; bundles switched on, while they show as mail arrives) and what it says. */
 export interface MailNotify { people: boolean; bundles: string[]; detail: "full" | "sender" | "count" }
@@ -469,6 +471,18 @@ export const whereLabel = (h: Pick<SearchHit, "where" | "folder_name" | "state">
 
 /** How a mail can be unsubscribed from (GET /mail/messages/:id/unsubscribe), and whether this hub goes through Tor. */
 export interface UnsubscribeOptions { one_click?: { host: string }; link?: string; mailto?: { to: string; subject: string }; tor: boolean }
+
+/**
+ * The Inbox's "Needs you" digest: threads in the Inbox the model marked for today or as needing a reply, today's
+ * first, then those needing a reply, newest first in each; at most `max`.
+ */
+export function needsYou<T extends MailSummary>(threads: T[], max = 5): T[] {
+  const rank = (m: T) => (m.triage?.urgency === "today" ? 0 : 1);
+  return threads
+    .filter((m) => m.state === "inbox" && !m.mine && (m.triage?.urgency === "today" || m.triage?.needs_reply))
+    .sort((a, b) => rank(a) - rank(b) || b.at.localeCompare(a.at))
+    .slice(0, max);
+}
 
 /** A size as people read it: 820 KB, 2.4 MB. */
 export function fileSize(n: number): string {

@@ -106,6 +106,13 @@ The time beside a row is the hour today, the weekday this week, else the date (w
 
 ---
 
+**Needs you (next PR):** above the day headings, up to 5 Inbox threads the hub's model marked `today` or `needs_reply`
+(`needsYou`), today's first, each with its people, Today and Reply marks and the model's summary (else the subject),
+opening the thread; with a line saying it was sorted by the hub's model and can be wrong. Rows of mail needing a reply
+show a small "Reply?". The info panel's switch turns triage off.
+
+---
+
 ## 5. A row
 
 From left to right:
