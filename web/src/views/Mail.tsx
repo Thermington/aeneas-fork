@@ -1309,12 +1309,7 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
   const single = m.members.length === 1;
   // Reply answers the thread's newest mail from someone else (never the owner's own reply).
   const answer = [...m.members].reverse().find((x) => !x.mine);
-  // Which writing box is open: a reply, a reply to all, or a forward of the thread's newest mail from someone else.
-  const [replying, setReplying] = useState<"one" | "all" | "forward" | null>(null);
   const [tools, setTools] = useState(false);
-  const writeBtn = (k: "one" | "all" | "forward", icon: string, label: string, title: string) => (
-    <button type="button" className={`mailx-act${replying === k ? " on" : ""}`} aria-expanded={replying === k} title={title} onClick={() => setReplying((x) => (x === k ? null : k))}><Icon name={icon} /><span>{label}</span></button>
-  );
   return (
     <article className={`mailx-card${picked ? " picked" : ""}`} data-nav={m.id}>
       {/* As on a row: the circle turns into a checkbox when pointed at, or while anything is selected. */}
@@ -1334,17 +1329,11 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
         <MoveButtons ids={threadIds(m)} back="inbox" spam />
         {answer && <button type="button" className={`mailx-act${tools ? " on" : ""}`} aria-expanded={tools} title="Unsubscribe from this sender's mail, or block them" onClick={() => setTools((x) => !x)}><Icon name="spam" /><span>Unsubscribe or block</span></button>}
         {answer && <button type="button" className="mailx-act" title={`All your mail with ${answer.from.address}`} onClick={() => showPerson(answer.from)}><Icon name="person" /><span>All with {personLabel(answer.from).split(/\s+/)[0]}</span></button>}
-        {answer && writeBtn("one", "reply", "Reply", "Write a reply, saved to Drafts in iCloud")}
-        {answer && writeBtn("all", "replyall", "Reply all", "Reply to the sender and everyone else on the mail, saved to Drafts in iCloud")}
-        {answer && writeBtn("forward", "forward", "Forward", "Forward it to someone, saved to Drafts in iCloud")}
       </div>
       {tools && answer && <SenderTools m={answer} close={() => setTools(false)} />}
-      {replying && answer && (replying === "forward"
-        ? <Composer key="forward" forward={answer} close={() => setReplying(null)} />
-        : <Composer key={replying} reply={answer} all={replying === "all"} close={() => setReplying(null)} />)}
       {m.state === "snoozed" && m.snooze_until && <div className="muted small mailx-card-pad">Snoozed until {fmtDateTime(m.snooze_until)}. It comes back to the top of your Inbox then; its task, called Snoozed mail, is in Tasks and Reminders.</div>}
       {snoozeFor === m.id && <SnoozePicker m={m} />}
-      {single ? <Message m={m.members[0]} /> : m.members.map((x, i) => (
+      {single ? <Message m={m.members[0]} write /> : m.members.map((x, i) => (
         <ThreadMessage key={x.id} m={x} startOpen={i === m.members.length - 1 || openUnread.has(x.id)} />
       ))}
     </article>
@@ -1457,6 +1446,8 @@ function Composer({ reply, all = false, forward, draft, close }: { reply?: MailS
   return (
     <form className="mailx-compose mailx-card-pad" onSubmit={(e) => { e.preventDefault(); void ask(true); }}>
       <div>{head}</div>
+      {/* Which mail this answers: its sender, its time, and its first lines. */}
+      {(reply ?? forward) && <div className="mailx-replying"><span className="muted small">{reply ? "Replying to" : "Forwarding"} {personLabel((reply ?? forward)!.from)} · {fmtDateTime((reply ?? forward)!.at)}</span>{(reply ?? forward)!.preview && <blockquote>{(reply ?? forward)!.preview}</blockquote>}</div>}
       {/* The sender asked for replies to go elsewhere: say so, since the reply goes to the address it came from. */}
       {reply?.reply_to && <div className="warn small">This mail asks for replies to go to {reply.reply_to}. Your reply goes to the address it came from, {reply.from.address}.</div>}
       {!reply && (
@@ -1579,7 +1570,7 @@ function ThreadMessage({ m, startOpen }: { m: MailSummary; startOpen: boolean })
         <span className="when">{fmtDateTime(m.at)}</span>
         {!open && <span className="line">{m.preview}</span>}
       </button>
-      {open && <Message m={m} />}
+      {open && <Message m={m} write />}
     </section>
   );
 }
@@ -1657,7 +1648,22 @@ function Attachments({ m }: { m: MailSummary }) {
 }
 
 /** One message's body: the mail as sent (the hub's cleaned page), or its text; fetched from the hub when it shows. */
-function Message({ m }: { m: MailSummary }) {
+/** A message, with Reply, Reply all and Forward under it (`write`): the writing box opens right below it. */
+function Message({ m, write = false }: { m: MailSummary; write?: boolean }) {
+  const [w, setW] = useState<"one" | "all" | "forward" | null>(null);
+  const btn = (k: "one" | "all" | "forward", icon: string, label: string) => (
+    <button type="button" className={`mailx-act${w === k ? " on" : ""}`} aria-expanded={w === k} onClick={() => setW((x) => (x === k ? null : k))}><Icon name={icon} /><span>{label}</span></button>
+  );
+  return (
+    <>
+      <MessageBody m={m} />
+      {write && <div className="mailx-card-acts mailx-card-pad mailx-msg-acts">{!m.mine && btn("one", "reply", "Reply")}{!m.mine && btn("all", "replyall", "Reply all")}{btn("forward", "forward", "Forward")}</div>}
+      {w === "forward" ? <Composer key="forward" forward={m} close={() => setW(null)} /> : w ? <Composer key={w} reply={m} all={w === "all"} close={() => setW(null)} /> : null}
+    </>
+  );
+}
+
+function MessageBody({ m }: { m: MailSummary }) {
   const [full, setFull] = useState<MailMessage | null>(null);
   const [err, setErr] = useState("");
   const [asText, setAsText] = useState(false);
