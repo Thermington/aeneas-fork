@@ -61,6 +61,11 @@ Reload the list after every action, and when the screen comes back to the front.
   searches the current view. On a phone held upright (up to 560px) it is a magnifier beside Refresh **(next PR)**;
   tapped, the field takes the whole bar with a close button, which clears the search, and it stays open while a search
   is typed. A phone on its side shows the search box.
+- **Search everywhere** (next PR): with 3 or more characters typed, below the view's own matches, "In all your mail":
+  `GET /mail/search?q=` a moment after typing stops, each hit labelled with where it is (`whereLabel`) and a snippet;
+  opened, the mail whole, with Show it in its place (Inbox, Snoozed, Done) and All mail with the sender.
+- **People view** (next PR): All with <name> on an open thread (or a hit) shows, in the list's place, all mail with that
+  person (`GET /mail/search?with=`), theirs and the owner's to them, with Close.
 - **Centering:** Refresh, search and Pinned only stay centered in the bar at every width. The two sides are equal, never
   narrower than what they hold, and the search box shrinks to keep them so. Up to 420px, Pinned only is a round pin
   button and New mail a round pencil.

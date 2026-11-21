@@ -22,6 +22,9 @@ import {
   cardLine,
   cardLink,
   type MailCard,
+  type SearchHit,
+  type MailAddress,
+  whereLabel,
   type MailDraft,
   DRAFT_FILES_BYTES,
   DRAFT_FILES_MAX,
@@ -119,8 +122,11 @@ interface LookValue {
   relocate: (ids: string[], to: MoveTarget, said: string, back: MoveTarget | null) => Promise<void>;
   /** The mailbox's other folders, for Move to. */
   folders: MailFolder[];
+  /** All mail with one person (the people view), and going to a mail where it is (from a search hit). */
+  showPerson: (who: MailAddress) => void;
+  showInPlace: (h: SearchHit) => void;
 }
-const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {}, snoozeTimes: SNOOZE_DEFAULTS, delivery: {}, notifyOn: NOTIFY_DEFAULTS, cursor: null, selected: new Set(), pick: () => {}, relocate: async () => {}, folders: [] });
+const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {}, snoozeTimes: SNOOZE_DEFAULTS, delivery: {}, notifyOn: NOTIFY_DEFAULTS, cursor: null, selected: new Set(), pick: () => {}, relocate: async () => {}, folders: [], showPerson: () => {}, showInPlace: () => {} });
 export function Mail() {
   const list = usePoll((c) => c.mailList(), 60_000);
   const { on } = useModules();
@@ -148,7 +154,9 @@ export function Mail() {
   const delivery = list.data?.bundle_delivery ?? {};
   // Search: a thread shows when any of its messages has every word.
   const messages = useMemo(() => (q.trim() ? threads.filter((t) => t.members.some((m) => matches(m, q))) : threads), [threads, q]);
-  const go = (v: MailView) => { setView(v); setOpen(null); setMenu(false); setSelected(new Set()); setCursor(null); };
+  // The people view: all mail with one person, in the list's place until closed or another view is chosen.
+  const [person, setPerson] = useState<MailAddress | null>(null);
+  const go = (v: MailView) => { setView(v); setOpen(null); setMenu(false); setSelected(new Set()); setCursor(null); setPerson(null); };
   // Keyboard and selection: the highlighted row, the selected threads, the "?" list, Snooze for several.
   const [cursor, setCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -394,7 +402,7 @@ export function Mail() {
   }, [cursor]);
 
   return (
-    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), relocate, folders: list.data?.folders ?? [], snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
+    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), relocate, folders: list.data?.folders ?? [], showPerson: (who) => { setPerson(who); setOpen(null); setMenu(false); }, showInPlace: (h) => { setPerson(null); setQ(""); setSearchOpen(false); setView(h.where === "snoozed" ? "snoozed" : h.where === "done" ? "done" : "inbox"); setOpen(byId.has(h.id) ? h.id : [...byId.values()].find((t) => t.members.some((x) => x.id === h.id))?.id ?? null); }, snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
     <div className={`mailx${menu ? " menu-open" : ""}${selected.size ? " selecting" : ""}`}>
       <div className={`mailx-bar ${barClass}${chosen.length ? " selecting" : ""}${searchOpen || q ? " search-open" : ""}`}>
         <div className="mailx-bar-left">
@@ -476,12 +484,16 @@ export function Mail() {
             : editing
               ? <BundleForm key={editing === "new" ? "new" : editing.id} start={editing === "new" ? null : editing} close={() => setEditing(null)}
                   saved={async (id) => { setEditing(null); await list.reload(); if (id) go(`b:${id}` as MailView); else go("inbox"); }} />
+            : person
+              ? <HitList key={person.address} title={`With ${personLabel(person)}`} sub={person.address} q="" person={person.address} stamp={list.data} close={() => setPerson(null)} />
             : folder
               ? <FolderView key={folder.key} f={folder} q={q} stamp={list.data} open={open} setOpen={setOpen} />
             : view === "inbox"
               ? <InboxList reminders={pinnedOnly || q.trim() ? [] : reminders} tasks={tasks} remindFor={remindFor} setRemindFor={setRemindFor} messages={messages} shown={shown} delivery={delivery} pinnedOnly={pinnedOnly} open={open} setOpen={setOpen} openBundles={openBundles} toggleBundle={toggleBundle} searching={!!q.trim()} waiting={!list.data.mailboxes.some((m) => m.last_refresh)} />
               : <Flat messages={viewMessages(messages, view, shown)} view={view} bundle={here ?? null} open={open} setOpen={setOpen}
                   edit={here?.custom !== undefined ? () => setEditing(list.data?.custom_bundles?.find((c) => c.id === here.id) ?? null) : undefined} />}
+          {/* Typing a search: beside the view's own matches, every kept mail's (whole texts, folders too). */}
+          {!person && !editing && !!list.data?.mailboxes.length && q.trim().length >= 3 && <HitList key="everywhere" title="In all your mail" q={q.trim()} stamp={list.data} />}
           {list.data?.mailboxes.some((m) => m.more) && <div className="muted small mailx-hint">Bringing in more of your Inbox. The rest arrives over the next few minutes.</div>}
         </div>
       </div>
@@ -495,6 +507,67 @@ function Nav({ view, current, go, icon, label, count }: { view: MailView; curren
     <button type="button" className={`mailx-nav v-${view}`} aria-current={current === view ? "page" : undefined} onClick={() => go(view)}>
       <span className="ico"><Icon name={icon} /></span>{label}{!!count && <span className="n">{count}</span>}
     </button>
+  );
+}
+
+/**
+ * Search hits from the hub (GET /mail/search): every kept mail with the search's words, or all mail with one person.
+ * Each row says where the mail is; opened, it shows whole, with Show it in its place for the Inbox, Snoozed and Done.
+ * Asked again a moment after the search stops changing, and with each list.
+ */
+function HitList({ title, sub, q, person, stamp, close }: { title: string; sub?: string; q: string; person?: string; stamp: unknown; close?: () => void }) {
+  const { showPerson, showInPlace } = useContext(Look);
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(() => {
+      engine.client?.mailSearch(q, person ?? "").then((r) => { if (live) { setHits(r.hits); setErr(""); } }).catch((e) => { if (live) setErr(plainError(e)); });
+    }, 300);
+    return () => { live = false; clearTimeout(t); };
+  }, [q, person, stamp]);
+  const mineTo = (h: SearchHit) => (h.mine || h.where === "drafts") && h.to?.length;
+  return (
+    <section className="mailx-col mailx-hits" aria-label={title}>
+      <h2 className="mailx-hits-head">
+        <span>{title}{hits ? ` (${hits.length}${hits.length >= 200 ? "+" : ""})` : ""}</span>
+        {sub && <span className="muted small">{sub}</span>}
+        {close && <button type="button" className="link small" onClick={close}>Close</button>}
+      </h2>
+      {err ? <div className="error">{err}</div> : !hits ? <div className="muted small">Searching</div> : !hits.length ? <div className="muted small">Nothing found.</div> : (
+        <div className="mailx-list">
+          {hits.map((h) => open === h.id ? (
+            <article key={h.id} className="mailx-card">
+              <button type="button" className="mailx-card-head" onClick={() => setOpen(null)} aria-expanded="true">
+                <span className="mailx-av" aria-hidden="true">{initials(h.from)}</span>
+                <span className="mailx-what">
+                  <span className="subject">{h.subject || "(no subject)"}</span>
+                  <span className="meta"><b>{personLabel(h.from)}</b> &lt;{h.from.address}&gt; · {fmtDateTime(h.at)} · {whereLabel(h)}</span>
+                </span>
+              </button>
+              <div className="mailx-card-acts mailx-card-pad">
+                {(h.where === "inbox" || h.where === "snoozed" || h.where === "done") && <button type="button" className="mailx-act" onClick={() => showInPlace(h)}><Icon name="inbox" /><span>Show it in its place</span></button>}
+                {!h.mine && !person && <button type="button" className="mailx-act" onClick={() => showPerson(h.from)}><Icon name="person" /><span>All mail with {personLabel(h.from).split(/\s+/)[0]}</span></button>}
+              </div>
+              <Message m={h} />
+            </article>
+          ) : (
+            <div key={h.id} className="mailx-item">
+              <button type="button" className="mailx-row" onClick={() => setOpen(h.id)}>
+                <span className="mailx-dotcol" />
+                <span className="mailx-av" aria-hidden="true">{initials(mineTo(h) ? h.to![0] : h.from)}</span>
+                <span className="mailx-what">
+                  <span className="who"><b>{mineTo(h) ? `To: ${h.to!.map(personLabel).join(", ")}` : personLabel(h.from)}</b><span className="chip">{whereLabel(h)}</span></span>
+                  <span className="line"><span className="subj">{h.subject || "(no subject)"}</span>{h.snippet && <> · {h.snippet}</>}</span>
+                </span>
+                <span className="when">{whenLabel(h.at)}</span>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1180,7 +1253,7 @@ function Sweep({ mails }: { mails: MailThread[] }) {
  * mail opens as before. Opening reads the thread's unread mail: on the hub and in the mailbox (its read flag only).
  */
 function Card({ m, close }: { m: MailThread; close: () => void }) {
-  const { snoozeFor, act, selected, pick } = useContext(Look);
+  const { snoozeFor, act, selected, pick, showPerson } = useContext(Look);
   const picked = selected.has(m.id);
   // The unread messages that open by themselves: the newest few. Each open message is a frame of its own, and a
   // thread of any length opening all at once is more than a page should carry.
@@ -1215,6 +1288,7 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
       <div className="mailx-card-acts mailx-card-pad"><DoneButton m={m} labelled /><SnoozeButton m={m} labelled /><PinButton m={m} labelled />
         <button type="button" className="mailx-act" title="Mark unread, here and in your mail app" onClick={() => { close(); void act((c) => c.mailSeen(m.id, false)); }}><Icon name="dot" /><span>Mark unread</span></button>
         <MoveButtons ids={threadIds(m)} back="inbox" spam />
+        {answer && <button type="button" className="mailx-act" title={`All your mail with ${answer.from.address}`} onClick={() => showPerson(answer.from)}><Icon name="person" /><span>All with {personLabel(answer.from).split(/\s+/)[0]}</span></button>}
         {answer && writeBtn("one", "reply", "Reply", "Write a reply, saved to Drafts in iCloud")}
         {answer && writeBtn("all", "replyall", "Reply all", "Reply to the sender and everyone else on the mail, saved to Drafts in iCloud")}
         {answer && writeBtn("forward", "forward", "Forward", "Forward it to someone, saved to Drafts in iCloud")}
@@ -1656,6 +1730,7 @@ const ICONS: Record<string, string> = {
   folder: "M3 6h6l2 2h10v11H3z",
   replyall: "M7 15l-5-5 5-5M12 15l-5-5 5-5M7 10h7a6 6 0 0 1 6 6v3",
   forward: "M15 15l5-5-5-5M20 10H10a6 6 0 0 0-6 6v3",
+  person: "M12 4a4 4 0 1 0 0 8a4 4 0 1 0 0-8zM4 20c1.5-4 4.5-6 8-6s6.5 2 8 6",
   clip: "M8 12.5l6.5-6.5a3 3 0 0 1 4.2 4.2L10 19a5 5 0 0 1-7-7l8-8",
   own: "M7 4h10v16l-5-4-5 4z",
   dot: "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z",

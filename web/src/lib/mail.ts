@@ -461,6 +461,12 @@ export function previewSrc(v: string | undefined): string | null {
 const RISKY = /\.(exe|msi|msix|appx|bat|cmd|com|scr|pif|cpl|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|jar|lnk|url|reg|dll|sys|iso|img|vhd|vhdx|dmg|pkg|app|command|sh|apk|xlsm|xlsb|xltm|docm|dotm|pptm|potm|ppsm|sldm|one|chm)$/i;
 export const riskyFile = (name: string) => RISKY.test(name.trim());
 
+/** A search hit (GET /mail/search): a list entry, where it is, and a snippet around the first match. */
+export type SearchHit = MailSummary & { where: MailState | FolderRole; folder_name?: string; snippet: string; to?: MailAddress[] };
+const WHERE: Record<string, string> = { inbox: "Inbox", snoozed: "Snoozed", done: "Done", sent: "Sent", drafts: "Drafts", junk: "Spam", trash: "Trash", folder: "Folder" };
+/** Where a hit is, as the screen names it ("Inbox", "Spam", the owner's folder's name); the owner's reply in a thread is "Your reply". */
+export const whereLabel = (h: Pick<SearchHit, "where" | "folder_name" | "state">) => (h.where === "own" ? h.folder_name || "Folder" : h.where === "sent" && h.state === "sent" ? "Your reply" : WHERE[h.where] ?? "Mail");
+
 /** A size as people read it: 820 KB, 2.4 MB. */
 export function fileSize(n: number): string {
   if (n < 1024) return `${n} B`;

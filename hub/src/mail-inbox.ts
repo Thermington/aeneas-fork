@@ -1198,6 +1198,52 @@ function folderSummary(r: FolderRow): FolderMailSummary {
   };
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Search (since 2026-11-21): every kept mail, Inbox and folders, its whole text
+
+/** One search hit: a list entry with where it is and a snippet around the first match. */
+export type SearchHit = MailSummary & { where: MailState | FolderRole; folder_name?: string; snippet: string; to?: MailAddress[] };
+export const SEARCH_MAX = 200;
+
+/** `%`, `_` and `\` in what the owner typed are themselves in a LIKE pattern (ESCAPE '\'). */
+const likeWord = (w: string) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+/** A line of a mail's text around `word` (its first match), links' addresses out, at most 200 characters; else its start. */
+export function snippetOf(text: string, word: string | undefined): string {
+  const flat = text.replace(/(https?:\/\/|www\.)[^\s)]+/gi, "").replace(/\s+/g, " ").trim();
+  const at = word ? flat.toLowerCase().indexOf(word.toLowerCase()) : -1;
+  if (at < 0) return flat.slice(0, 200);
+  const start = Math.max(0, at - 60);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, start + 200)}`;
+}
+
+/**
+ * Every kept mail (the Inbox, Snoozed, Done, the owner's replies in threads, and every kept folder) that has each word
+ * of `q` in its subject, text, sender's name or address (case aside), newest first, at most SEARCH_MAX. `with`: only
+ * mail with that person: from them, or the owner's to them (Sent and Drafts by To; the owner's replies in a thread of
+ * theirs). The words are parameters, never part of the query.
+ */
+export function searchMail(db: DB, opts: { q?: string; with?: string }): SearchHit[] {
+  const words = (opts.q ?? "").toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8).map((w) => w.slice(0, 60));
+  const person = (opts.with ?? "").trim().toLowerCase();
+  if (!words.length && !person) return [];
+  const match = words.map(() => "(lower(subject) LIKE ? ESCAPE '\\' OR lower(text) LIKE ? ESCAPE '\\' OR lower(from_name) LIKE ? ESCAPE '\\' OR lower(from_address) LIKE ? ESCAPE '\\')");
+  const params = words.flatMap((w) => Array(4).fill(likeWord(w)));
+  // The Inbox's table: received mail from them, and the owner's replies in a thread that has their mail.
+  const inboxWith = person ? " AND (from_address = ? OR (mine = 1 AND thread IN (SELECT thread FROM inbox WHERE from_address = ? AND thread IS NOT NULL)))" : "";
+  const inboxRows = db.prepare(`SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments FROM inbox WHERE 1 = 1${match.length ? ` AND ${match.join(" AND ")}` : ""}${inboxWith} ORDER BY at DESC LIMIT ?`)
+    .all(...params, ...(person ? [person, person] : []), SEARCH_MAX) as (Row & { attachments?: string | null })[];
+  // The folders: from them, or the owner's own to them (To holds them).
+  const folderWith = person ? " AND (m.from_address = ? OR (f.role IN ('sent', 'drafts') AND lower(m.to_list) LIKE ? ESCAPE '\\'))" : "";
+  const folderRows = db.prepare(`SELECT m.key, m.at, m.from_name, m.from_address, m.to_list, m.reply_to, m.subject, m.text, m.automated, m.seen, m.attachments, f.role, f.path FROM folder_mail m JOIN folders f ON f.account = m.account AND f.path = m.folder WHERE 1 = 1${match.length ? ` AND ${match.map((x) => x.replace(/(subject|text|from_name|from_address)/g, "m.$1")).join(" AND ")}` : ""}${folderWith} ORDER BY m.at DESC LIMIT ?`)
+    .all(...params, ...(person ? [person, likeWord(`"address":"${person}"`)] : []), SEARCH_MAX) as (FolderRow & { path: string })[];
+  const hits: SearchHit[] = [
+    ...inboxRows.map((r) => ({ ...summary(r), where: r.state, snippet: snippetOf(r.text, words[0]) })),
+    ...folderRows.map((r) => ({ ...folderSummary(r), where: r.role, ...(r.role === "own" ? { folder_name: r.path.split(/[/.]/).pop() || r.path } : {}), snippet: snippetOf(r.text, words[0]) })),
+  ];
+  return hits.sort((a, b) => b.at.localeCompare(a.at)).slice(0, SEARCH_MAX);
+}
+
 /** A folder's kept mail, newest first; null when there is no such folder. */
 export function folderMail(db: DB, key: string): FolderMailSummary[] | null {
   const f = db.prepare("SELECT account, path, role FROM folders WHERE key = ?").get(key) as { account: string; path: string; role: FolderRole } | undefined;

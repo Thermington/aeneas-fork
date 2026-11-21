@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { bundleDelivery, folderMail, mailAttachment, mailAttachments, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { bundleDelivery, folderMail, searchMail, mailAttachment, mailAttachments, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -51,6 +51,14 @@ export function mailRoutes() {
   // Show pictures, on a hub without Tor: this one mail's web pictures, fetched straight from the hub because the person
   // asked (its sender then sees the home's internet address). A hub with Tor fetches them itself and refuses this.
   // A folder's kept mail (Drafts, Sent, Junk, Trash, the owner's own), newest first; read-only.
+  // Search every kept mail (whole texts, the Inbox and folders), or all mail with one person. Read-only, on the hub.
+  r.get("/mail/search", (c) => {
+    const q = c.req.query("q") ?? "";
+    const person = c.req.query("with") ?? "";
+    if (q.length > 300 || person.length > 254) throw new StoreError(422, "the search is too long");
+    return c.json({ hits: searchMail(c.get("hub").mailDb, { q, with: person }) });
+  });
+
   r.get("/mail/folders/:key", (c) => {
     const messages = folderMail(c.get("hub").mailDb, c.req.param("key"));
     if (!messages) throw new StoreError(404, "there is no such folder");

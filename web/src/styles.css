@@ -1754,3 +1754,8 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-attach .mailx-icon { width: 16px; height: 16px; }
 .mailx-check { display: inline-flex; align-items: center; gap: 6px; }
 .mailx-check input { width: auto; min-height: 0; }
+/* Search hits and the people view: a heading with the count, rows that say where each mail is. */
+.mailx-hits { margin-top: 16px; }
+.mailx-hits-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 15px; margin: 0 0 8px 4px; }
+.mailx-hits-head .link { margin-left: auto; }
+.mailx-hits .who .chip { min-height: 0; padding: 1px 7px; line-height: 16px; flex: none; }

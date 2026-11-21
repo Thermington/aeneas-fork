@@ -6,7 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
-import type { BundleDelivery, CustomBundle, FolderMail, MailAttachment, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
+import type { BundleDelivery, CustomBundle, FolderMail, SearchHit, MailAttachment, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -1031,6 +1031,13 @@ export class HubClient {
       throw new HubError(res.status, msg);
     }
     return res.blob();
+  }
+  /** Every kept mail with each word of `q` (whole texts, Inbox and folders), or all mail with one person (`with`). */
+  mailSearch(q: string, withPerson = "") {
+    const p = new URLSearchParams();
+    if (q) p.set("q", q);
+    if (withPerson) p.set("with", withPerson);
+    return this.req<{ hits: SearchHit[] }>("GET", `/mail/search?${p}`);
   }
   /** One of the mailbox's other folders: its kept mail, newest first. */
   mailFolder(key: string) {

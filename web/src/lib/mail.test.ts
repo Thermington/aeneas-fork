@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -427,5 +427,15 @@ describe("mail attachments", () => {
   });
   it("says sizes as people read them", () => {
     expect([fileSize(512), fileSize(840_000), fileSize(2_500_000), fileSize(25_000_000)]).toEqual(["512 B", "820 KB", "2.4 MB", "24 MB"]);
+  });
+});
+
+describe("mail search hits", () => {
+  it("names where a hit is", () => {
+    expect(whereLabel({ where: "inbox", state: "inbox" })).toBe("Inbox");
+    expect(whereLabel({ where: "junk", state: "folder" })).toBe("Spam");
+    expect(whereLabel({ where: "sent", state: "sent" })).toBe("Your reply");
+    expect(whereLabel({ where: "sent", state: "folder" })).toBe("Sent");
+    expect(whereLabel({ where: "own", folder_name: "Taxes", state: "folder" })).toBe("Taxes");
   });
 });
