@@ -1044,13 +1044,30 @@ function Composer({ reply, close }: { reply?: MailSummary; close: () => void }) 
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // A reply's greeting and sign-off: suggested by the hub (its local model, or the plain ones) when the reply opens,
+  // each the owner's to edit or drop. Null: dropped. What the owner already typed in one is never overwritten.
+  const [greeting, setGreeting] = useState<string | null>("");
+  const [signoff, setSignoff] = useState<string | null>("");
+  const [suggesting, setSuggesting] = useState(!!reply);
+  const touched = useRef({ greeting: false, signoff: false });
+  useEffect(() => {
+    if (!reply) return;
+    let live = true;
+    engine.client?.mailGreeting(reply.id).then((g) => {
+      if (!live) return;
+      if (!touched.current.greeting) setGreeting(g.greeting);
+      if (!touched.current.signoff) setSignoff(g.signoff);
+    }).catch(() => undefined).finally(() => { if (live) setSuggesting(false); });
+    return () => { live = false; };
+  }, [reply?.id]);
   const ask = async (asPreview: boolean) => {
     const c = engine.client;
     if (!c) return;
     setBusy(true);
     setErr("");
     try {
-      const r = await c.mailDraft({ ...(reply ? { reply_to: reply.id } : { to, subject }), text, ...(asPreview ? { preview: true } : {}) });
+      const around = { ...(greeting?.trim() ? { greeting } : {}), ...(signoff?.trim() ? { signoff } : {}) };
+      const r = await c.mailDraft({ ...(reply ? { reply_to: reply.id } : { to, subject }), text, ...around, ...(asPreview ? { preview: true } : {}) });
       if (asPreview) setPreview(r); else setSaved(true);
     } catch (e) { setErr(plainError(e)); }
     setBusy(false);
@@ -1094,7 +1111,9 @@ function Composer({ reply, close }: { reply?: MailSummary; close: () => void }) 
           <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" aria-label="Subject" maxLength={200} />
         </>
       )}
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder="Write your mail" aria-label="Your mail" maxLength={50000} autoFocus />
+      {reply && <AroundLine label="Greeting" value={greeting} rows={1} waiting={suggesting} set={(v) => { touched.current.greeting = true; setGreeting(v); }} />}
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder={reply ? "Write your reply: just what you want to say" : "Write your mail"} aria-label="Your mail" maxLength={50000} autoFocus />
+      {reply && <AroundLine label="Sign-off" value={signoff} rows={2} waiting={suggesting} set={(v) => { touched.current.signoff = true; setSignoff(v); }} />}
       <div className="mailx-compose-acts">
         <button type="submit" className="primary" disabled={busy || !text.trim() || (!reply && !to.trim())}>{busy ? "Checking" : "Preview"}</button>
         <button type="button" className="link" onClick={close}>Discard</button>
@@ -1102,6 +1121,20 @@ function Composer({ reply, close }: { reply?: MailSummary; close: () => void }) 
         {err && <span className="error small" role="alert">{err}</span>}
       </div>
     </form>
+  );
+}
+
+/**
+ * A reply's greeting or sign-off: a short field (the hub takes at most 2 lines of plain words), with Remove; once
+ * removed, Add brings back an empty one. `waiting`: the suggestion is on its way.
+ */
+function AroundLine({ label, value, rows, waiting, set }: { label: string; value: string | null; rows: number; waiting: boolean; set: (v: string | null) => void }) {
+  if (value === null) return <button type="button" className="link small mailx-around-add" onClick={() => set("")}>Add a {label.toLowerCase()}</button>;
+  return (
+    <div className="mailx-around">
+      <textarea value={value} onChange={(e) => set(e.target.value)} rows={rows} maxLength={130} aria-label={label} placeholder={waiting ? "Suggesting…" : label} />
+      <button type="button" className="link small" onClick={() => set(null)} aria-label={`Remove the ${label.toLowerCase()}`}>Remove</button>
+    </div>
   );
 }
 

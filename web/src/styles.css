@@ -1683,3 +1683,8 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .cal-color-row label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-color-row input[type="color"] { flex: none; width: 34px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: none; }
 .cal-color-row > .muted, .cal-color-row > button { flex: none; white-space: nowrap; }
+/* A reply's greeting and sign-off: lighter fields around the owner's own text, each with Remove. */
+.mailx-around { display: flex; align-items: flex-start; gap: 8px; }
+.mailx-around textarea { flex: 1; min-height: 0; resize: none; font: inherit; color: var(--muted); background: transparent; border-style: dashed; }
+.mailx-around textarea:focus { color: var(--text); border-style: solid; }
+.mailx-around-add { align-self: flex-start; }

@@ -19,7 +19,8 @@ import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MO
 import { fetchBytesViaTor, fetchPublicBytes, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
 import { textCards, type MailCard } from "./mail-cards.js";
-import { buildMessage, checkedNew, checkedText, replyFields } from "./mail-compose.js";
+import { assembled, buildMessage, checkedLine, checkedNew, checkedText, DRAFT_TEXT_MAX, GREETING_SYSTEM, greetingPrompt, plainGreeting, readSuggestion, replyFields } from "./mail-compose.js";
+import { withPriority } from "./ai/backends.js";
 
 /**
  * The Mail screen's store (CONTRACT.md, Mail): the iCloud Inbox's mail, sorted into bundles, with what the owner did to
@@ -768,6 +769,7 @@ export async function setSeen(hub: Hub, key: string, seen: boolean): Promise<{ o
   return { ok: r.ok === 1, synced: r.synced === 1 };
 }
 
+/** `text`: the whole text saved, the greeting and sign-off around the owner's own words. */
 export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; subject: string; text: string; in_reply_to?: string }
 
 /**
@@ -779,7 +781,16 @@ export interface DraftResult { saved: boolean; from: MailAddress; to: string[]; 
  */
 export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Promise<DraftResult> {
   const db = hub.mailDb;
-  const text = checkedText(body.text);
+  const typed = checkedText(body.text);
+  // The greeting and sign-off (suggested, then edited or dropped by the owner) are checked again here: short plain words.
+  const line = (v: unknown, what: string) => {
+    if (v === undefined || v === null || v === "") return null;
+    const ok = checkedLine(v);
+    if (!ok) throw new StoreError(422, `${what} is at most 2 short lines of plain words: no links, addresses or long numbers`);
+    return ok;
+  };
+  const text = assembled(typed, line(body.greeting, "the greeting"), line(body.signoff, "the sign-off"));
+  if (text.length > DRAFT_TEXT_MAX + 200) throw new StoreError(422, "the mail is too long");
   let account: string | undefined;
   let fields: ReturnType<typeof replyFields>;
   if (body.reply_to !== undefined) {
@@ -812,6 +823,32 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
   });
   console.log(`[mail-inbox] ${label}: 1 draft saved`);
   return { ...out, saved: true };
+}
+
+/**
+ * The greeting and sign-off for a reply to a kept mail, suggested by the local model (never a cloud one) from the
+ * owner's name and the thread's latest messages, their own words only. Nothing else of the owner's goes to it: no
+ * memory facts, no records. What it writes is checked (checkedLine); without the model, or for what fails the check,
+ * the plain ones ("Hi Alex," and "Thanks,
+Robin"). The owner sees both in the reply, and edits or drops them.
+ */
+export async function suggestGreeting(hub: Hub, key: string): Promise<{ greeting: string; signoff: string; by: "model" | "plain" }> {
+  const db = hub.mailDb;
+  const r = db.prepare("SELECT from_name, from_address, thread, mine FROM inbox WHERE key = ?").get(key) as { from_name: string; from_address: string; thread: string | null; mine: number } | undefined;
+  if (!r) throw new StoreError(404, "that message is not kept (it left the Inbox)");
+  if (r.mine) throw new StoreError(422, "that is your own reply: answer the other person's mail in the thread");
+  const name = hub.profile.get().name.trim();
+  const owner = name && name !== "the owner" ? name : "";
+  const plain = plainGreeting({ name: r.from_name, address: r.from_address }, owner);
+  const rows = (r.thread
+    ? db.prepare("SELECT from_name, from_address, subject, text, mine, at FROM inbox WHERE thread = ? AND at <= (SELECT at FROM inbox WHERE key = ?) ORDER BY at DESC, key LIMIT 4").all(r.thread, key)
+    : db.prepare("SELECT from_name, from_address, subject, text, mine, at FROM inbox WHERE key = ?").all(key)) as { from_name: string; from_address: string; subject: string; text: string; mine: number }[];
+  const messages = rows.reverse().map((m) => ({ mine: !!m.mine, from: { name: m.from_name, address: m.from_address }, subject: m.subject, text: ownWords(m.text.slice(0, 4000)) }));
+  const system = GREETING_SYSTEM.replaceAll("{{owner}}", owner || "the owner");
+  const raw = await withPriority("filing", () => hub.ai.completeJson(`mail-greeting`, system, greetingPrompt(owner || "the owner", messages), { allow_cloud: false })).catch(() => null);
+  const out = readSuggestion(raw, plain);
+  console.log(`[mail-inbox] greeting suggested (${out.by})`);
+  return out;
 }
 
 /** Pin or unpin a kept mail: it stays where it is in the list, shows with a pin, and Sweep passes it by. */
