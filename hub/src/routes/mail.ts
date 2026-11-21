@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { bundleDelivery, folderMail, searchMail, mailAttachment, mailAttachments, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { blockedSenders, blockSender, bundleDelivery, folderMail, searchMail, unblockSender, unsubscribe, unsubscribeOptions, mailAttachment, mailAttachments, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -15,7 +15,7 @@ export function mailRoutes() {
   r.get("/mail", (c) => {
     const hub = c.get("hub");
     wakeSnoozed(hub);
-    return c.json({ messages: listMail(hub.mailDb, bundleContext(hub)), logos: mailLogos(hub.mailDb), mailboxes: mailboxStates(hub), snooze_times: snoozeTimes(hub.mailDb), bundle_delivery: bundleDelivery(hub.mailDb), custom_bundles: customBundles(hub.mailDb), mail_notify: mailNotify(hub.mailDb), folders: mailFolders(hub.mailDb) });
+    return c.json({ messages: listMail(hub.mailDb, bundleContext(hub)), logos: mailLogos(hub.mailDb), mailboxes: mailboxStates(hub), snooze_times: snoozeTimes(hub.mailDb), bundle_delivery: bundleDelivery(hub.mailDb), custom_bundles: customBundles(hub.mailDb), mail_notify: mailNotify(hub.mailDb), folders: mailFolders(hub.mailDb), blocked: blockedSenders(hub.mailDb) });
   });
 
   // The owner's snooze times (what "Tomorrow" and the rest mean).
@@ -114,6 +114,20 @@ export function mailRoutes() {
       "Cache-Control": "no-store",
     } });
   });
+
+  // Unsubscribe: the ways the mail's headers offer now; then one of them, as the owner chose (confirmed on the screen).
+  r.get("/mail/messages/:id/unsubscribe", async (c) => {
+    const o = await unsubscribeOptions(c.get("hub"), c.req.param("id"));
+    if (!o) throw new StoreError(404, "This mail is not in the mailbox any more. Refresh and try again.");
+    return c.json(o);
+  });
+  r.post("/mail/messages/:id/unsubscribe", async (c) => {
+    const body = await readJsonObject(c);
+    return c.json(await unsubscribe(c.get("hub"), c.req.param("id"), body.how, body.direct === true));
+  });
+  // Block and unblock a sender (an address or @domain).
+  r.post("/mail/settings/blocked", async (c) => c.json(await blockSender(c.get("hub"), (await readJsonObject(c)).sender)));
+  r.post("/mail/settings/unblock", async (c) => c.json({ blocked: unblockSender(c.get("hub").mailDb, (await readJsonObject(c)).sender) }));
 
   // Pin: on the hub only; nothing changes in iCloud.
   r.post("/mail/messages/:id/pin", async (c) => {

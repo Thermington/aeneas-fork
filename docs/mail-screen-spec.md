@@ -198,6 +198,10 @@ This part matters most. Mail is hostile input.
     Apple Mail); the owner's folders have Move to Inbox, Delete and Move to; Sent and Drafts have Delete only.
   - **Undo** sends the mail back, using the new ids in the answer's `to`. There is none when the mail can't go back
     (Sent, Drafts) or the hub doesn't know its new id. Deleted Done mail comes back to the Inbox.
+- **Unsubscribe or block (next PR):** on an open thread, a panel from `GET .../unsubscribe`: one click (through Tor; on a
+  hub without Tor, a second press after saying the sender will see the home's address), the sender's page (opened in the
+  browser, its host shown), or a draft to their unsubscribe address; and Block the address or everyone at its domain
+  (`POST /mail/settings/blocked`), their mail then going to Spam. The info panel lists blocked senders with Unblock.
 - **Selection:** click or Space on the circle; Shift extends it. The bar acts on everything selected: Done, Snooze
   (one picker for all), Pin (Unpin when all are pinned), Mark read, Mark unread, Delete and Spam **(next PR)**.
 - **Keys (desktop):** ↑ ↓ to move, Shift + ↑ ↓ to select while moving, Enter to open (or open and close a bundle), Esc to

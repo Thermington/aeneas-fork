@@ -271,6 +271,47 @@ export function fetchBytesViaTor(url: string, socks: string, timeoutMs = 45_000,
 }
 
 /**
+ * RFC 8058 one-click unsubscribe (the Mail screen's Unsubscribe, which the owner confirmed): one POST of
+ * `List-Unsubscribe=One-Click` to an https address a mail gave. Through Tor when `socks` is set (curl, as
+ * fetchBytesViaTor: the sender sees a Tor exit, never the home address); otherwise directly, and only to a public
+ * address (publicOnlyLookup: a mail cannot point the hub at the home network). No redirect followed, no cookie, nothing
+ * read back but the status. True for a 2xx answer; TorDown when Tor is not there.
+ */
+export function postOneClick(url: string, socks: string, timeoutMs = 30_000): Promise<boolean> {
+  let u: URL;
+  try { u = new URL(url); } catch { return Promise.resolve(false); }
+  if (u.protocol !== "https:" || u.username || u.password) return Promise.resolve(false);
+  const body = "List-Unsubscribe=One-Click";
+  if (socks) {
+    return new Promise((resolve, reject) => {
+      const args = ["-sS", "-g", "--max-time", String(Math.ceil(timeoutMs / 1000)), "--proto", "=https", "--socks5-hostname", socks, "-A", UA,
+        "-X", "POST", "-H", "Content-Type: application/x-www-form-urlencoded", "--data-raw", body, "-o", process.platform === "win32" ? "NUL" : "/dev/null",
+        "-w", "%{stderr}\n@@meta@@%{http_code}", u.toString()];
+      const child = spawn(torFetch.curl, args, { stdio: ["ignore", "ignore", "pipe"] });
+      let err = "";
+      child.stderr.on("data", (b: Buffer) => { if (err.length < 4000) err += b.toString("utf8"); });
+      child.on("error", () => reject(new TorDown()));
+      child.on("close", (code) => {
+        if (code === 7) return reject(new TorDown());
+        const status = Number(/@@meta@@(\d+)/.exec(err)?.[1] ?? 0);
+        resolve(code === 0 && status >= 200 && status < 300);
+      });
+    });
+  }
+  if (refused(u.hostname)) return Promise.resolve(false);
+  return timed(timeoutMs, async (signal) => {
+    const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const req = https.request(u, { method: "POST", signal, lookup: publicOnlyLookup, headers: { "user-agent": UA, "content-type": "application/x-www-form-urlencoded", "content-length": String(body.length) } }, resolve);
+      req.on("error", reject);
+      req.end(body);
+    });
+    res.resume();
+    const status = res.statusCode ?? 0;
+    return status >= 200 && status < 300;
+  }).then((x) => !!x).catch(() => false);
+}
+
+/**
  * Read a page for the assistant. Only public pages: an address on the owner's own network (a router's admin page,
  * another machine, the hub itself) is refused, so a page or a message cannot steer the assistant into reading
  * them; machines are reached with host commands (Homelab) instead.

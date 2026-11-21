@@ -782,6 +782,22 @@ export async function recipientsICloud(hub: Hub, accountKey: string, ref: MoveRe
   });
 }
 
+/** A kept message's List-Unsubscribe and List-Unsubscribe-Post headers now (read-only, checked again); null when it is gone. */
+export async function unsubscribeHeadersICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<{ header: string; post: string } | null> {
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    const kept = await openKept(c, ref);
+    if (!kept) return null;
+    const m = await c.fetchOne(kept.uid, { envelope: true, bodyStructure: true, internalDate: true, headers: ["list-unsubscribe", "list-unsubscribe-post"] }, { uid: true });
+    return m ? { header: headerValue(m.headers, "list-unsubscribe"), post: headerValue(m.headers, "list-unsubscribe-post") } : null;
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+}
+
 /**
  * One attachment's bytes, for a download the owner asked for: only a part the message's own structure lists as an
  * attachment, at most FILE_BYTES, read with BODY.PEEK, never kept. Null when the message or the part is not there.
@@ -1075,4 +1091,5 @@ export const icloudInbox: InboxSource = {
   attachments: (hub, account, ref) => attachmentsICloud(hub, account, ref),
   attachment: (hub, account, ref, part) => attachmentICloud(hub, account, ref, part),
   recipients: (hub, account, ref) => recipientsICloud(hub, account, ref),
+  unsubscribeHeaders: (hub, account, ref) => unsubscribeHeadersICloud(hub, account, ref),
 };

@@ -16,9 +16,10 @@ import { errCode } from "./logsafe.js";
 import { mailDocument, pictureData, withImages } from "./mail-html.js";
 import { ownWords, quoteStart } from "./imports/mail-text.js";
 import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MODULES, type BundleContext } from "./mail-bundles.js";
-import { fetchBytesViaTor, fetchPublicBytes, TorDown } from "./ai/web.js";
+import { fetchBytesViaTor, fetchPublicBytes, postOneClick, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
 import { textCards, type MailCard } from "./mail-cards.js";
+import { blockedForm, isBlocked, unsubscribeWays } from "./mail-unsubscribe.js";
 import { assembled, buildMessage, checkedFiles, checkedLine, checkedNew, checkedText, DRAFT_TEXT_MAX, FILES_BYTES, FILES_MAX, forwardQuote, forwardSubject, replyAllCc, type DraftFile, GREETING_SYSTEM, greetingPrompt, plainGreeting, readSuggestion, replyFields } from "./mail-compose.js";
 import { withPriority } from "./ai/backends.js";
 
@@ -753,8 +754,17 @@ export async function moveMail(hub: Hub, keys: string[], to: string, now = new D
   const db = hub.mailDb;
   const dest = to === "inbox" || to === "trash" || to === "junk" ? null : (db.prepare("SELECT account, path FROM folders WHERE key = ? AND role = 'own'").get(to) as { account: string; path: string } | undefined);
   if (to !== "inbox" && to !== "trash" && to !== "junk" && !dest) throw new StoreError(422, "to is inbox, trash, junk or one of your own folders");
-  const result = await exclusive(hub, async (): Promise<MoveToResult> => {
-    type Kept = { key: string; account: string; id: string; message_id: string | null; table: "inbox" | "folder_mail"; state?: MailState; folder?: string };
+  const result = await exclusive(hub, () => moveNow(hub, keys, to, dest ?? null, now));
+  // Mail moved to the Inbox comes in with a refresh (its bundle, thread and pictures as any new mail's).
+  if (to === "inbox" && result.moved.length) void refreshMail(hub).catch((e) => console.error(`[mail-inbox] ${errCode(e)}`));
+  return result;
+}
+
+/** moveMail's work, for a caller that already holds the hub's one-at-a-time turn (a refresh moving blocked mail). */
+async function moveNow(hub: Hub, keys: string[], to: string, dest: { account: string; path: string } | null, now: Date): Promise<MoveToResult> {
+  const db = hub.mailDb;
+  {
+    type Kept ={ key: string; account: string; id: string; message_id: string | null; table: "inbox" | "folder_mail"; state?: MailState; folder?: string };
     const inInbox = db.prepare("SELECT key, account, id, message_id, state FROM inbox WHERE key = ? AND state != 'sent'");
     const inFolder = db.prepare("SELECT key, account, id, message_id, folder FROM folder_mail WHERE key = ?");
     const rows: Kept[] = [];
@@ -806,10 +816,7 @@ export async function moveMail(hub: Hub, keys: string[], to: string, now = new D
     if (moved.length) { db.pragma("wal_checkpoint(TRUNCATE)"); console.log(`[mail-inbox] move: ${moved.length} moved${failed ? `, ${failed} not moved` : ""}`); }
     if (failed && !error) error = failed === 1 ? "One mail was not moved: it changed in iCloud since the last refresh. Refresh and try again." : `${failed} mails were not moved: they changed in iCloud since the last refresh. Refresh and try again.`;
     return { moved, failed, to: newKeys, ...(error ? { error } : {}) };
-  });
-  // Mail moved to the Inbox comes in with a refresh (its bundle, thread and pictures as any new mail's).
-  if (to === "inbox" && result.moved.length) void refreshMail(hub).catch((e) => console.error(`[mail-inbox] ${errCode(e)}`));
-  return result;
+  }
 }
 
 function finishSnoozeTasks(hub: Hub, keys: string[], now: Date) {
@@ -936,6 +943,91 @@ export async function mailAttachment(hub: Hub, key: string, part: string): Promi
   const file = await source.attachment(hub, r.account, { id: r.id, message_id: r.message_id }, part);
   if (file) console.log(`[mail-inbox] ${mailboxLabel(hub, r.account)}: 1 attachment downloaded`);
   return file;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Unsubscribe and block (since 2026-11-21)
+
+/** The one-click POST, swappable in tests. */
+export const oneClick = { post: postOneClick };
+
+/** A kept mail's unsubscribe ways, read from the mailbox now; whether this hub would go through Tor. Null when gone. */
+export async function unsubscribeOptions(hub: Hub, key: string): Promise<{ one_click?: { host: string }; link?: string; mailto?: { to: string; subject: string }; tor: boolean } | null> {
+  const r = keptRef(hub.mailDb, key);
+  const source = r ? sourceOf(r.account) : null;
+  if (!r || !source?.unsubscribeHeaders) return null;
+  const h = await source.unsubscribeHeaders(hub, r.account, { id: r.id, message_id: r.message_id });
+  if (!h) return null;
+  const w = unsubscribeWays(h.header, h.post);
+  return { ...(w.one_click ? { one_click: { host: new URL(w.one_click).hostname } } : {}), ...(w.link ? { link: w.link } : {}), ...(w.mailto ? { mailto: w.mailto } : {}), tor: !!hub.cfg.torSocks };
+}
+
+/**
+ * Unsubscribe the way the owner chose, from what the mail's headers say now (never from the request): `one_click`
+ * POSTs to the mail's https address, through Tor when the hub has it; without Tor only with `direct` (the owner was told
+ * the sender sees the home's address) and only to a public address. `mailto` saves a draft to the mail's unsubscribe
+ * address, for the owner to send.
+ */
+export async function unsubscribe(hub: Hub, key: string, how: unknown, direct: boolean): Promise<{ ok: boolean; via?: "tor" | "direct"; draft?: boolean }> {
+  const r = keptRef(hub.mailDb, key);
+  const source = r ? sourceOf(r.account) : null;
+  if (!r || !source?.unsubscribeHeaders) throw new StoreError(404, "that message is not kept (it left the Inbox)");
+  const h = await source.unsubscribeHeaders(hub, r.account, { id: r.id, message_id: r.message_id });
+  if (!h) throw new StoreError(404, "This mail is not in the mailbox any more. Refresh and try again.");
+  const w = unsubscribeWays(h.header, h.post);
+  const label = mailboxLabel(hub, r.account);
+  if (how === "one_click") {
+    if (!w.one_click) throw new StoreError(409, "This mail has no one-click unsubscribe.");
+    const socks = hub.cfg.torSocks;
+    if (!socks && !direct) throw new StoreError(409, "This hub has no Tor: unsubscribing would show the sender your home's internet address. Confirm to go ahead.");
+    let ok: boolean;
+    try { ok = await oneClick.post(w.one_click, socks); } catch (e) { if (e instanceof TorDown) throw new StoreError(503, "Tor is not answering on the hub, so nothing was sent. Try again later."); throw e; }
+    console.log(`[mail-inbox] ${label}: unsubscribe one-click ${ok ? "sent" : "refused"} (${socks ? "tor" : "direct"})`);
+    if (!ok) throw new StoreError(502, "The sender did not accept the unsubscribe. Try its own link instead, from the mail.");
+    return { ok: true, via: socks ? "tor" : "direct" };
+  }
+  if (how === "mailto") {
+    if (!w.mailto) throw new StoreError(409, "This mail has no unsubscribe address.");
+    await saveMailDraft(hub, { to: w.mailto.to, subject: w.mailto.subject, text: "unsubscribe", from: r.account.slice(r.account.indexOf(":") + 1) });
+    return { ok: true, draft: true };
+  }
+  throw new StoreError(422, "how is one_click or mailto");
+}
+
+/** The owner's blocked senders: addresses and `@domain`s. */
+export function blockedSenders(db: DB): string[] {
+  const r = db.prepare("SELECT value FROM settings WHERE key = 'blocked_senders'").get() as { value: string } | undefined;
+  try { return r ? (JSON.parse(r.value) as unknown[]).filter((x): x is string => typeof x === "string") : []; } catch { return []; }
+}
+const saveBlocked = (db: DB, list: string[]) => db.prepare("INSERT INTO settings (key, value) VALUES ('blocked_senders', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(list));
+export const BLOCKED_MAX = 200;
+
+/** The kept Inbox and snoozed mail from blocked senders (never the owner's own). */
+function blockedKeys(db: DB, blocked: string[], account?: string): string[] {
+  if (!blocked.length) return [];
+  const rows = db.prepare(`SELECT key, from_address FROM inbox WHERE state IN ('inbox', 'snoozed') AND mine = 0${account ? " AND account = ?" : ""}`).all(...(account ? [account] : [])) as { key: string; from_address: string }[];
+  return rows.filter((r) => isBlocked(blocked, r.from_address)).map((r) => r.key);
+}
+
+/** Block a sender (an address or `@domain`): kept; their mail in the Inbox moves to Spam now, and new mail at each refresh. */
+export async function blockSender(hub: Hub, sender: unknown): Promise<{ blocked: string[]; moved: number }> {
+  const s = blockedForm(sender);
+  if (!s) throw new StoreError(422, "sender is an email address or @domain");
+  const list = blockedSenders(hub.mailDb);
+  if (!list.includes(s)) {
+    if (list.length >= BLOCKED_MAX) throw new StoreError(409, `at most ${BLOCKED_MAX} blocked senders`);
+    saveBlocked(hub.mailDb, [...list, s]);
+  }
+  const keys = blockedKeys(hub.mailDb, [s]);
+  const r = keys.length ? await moveMail(hub, keys, "junk") : { moved: [] as string[] };
+  return { blocked: blockedSenders(hub.mailDb), moved: r.moved.length };
+}
+
+export function unblockSender(db: DB, sender: unknown): string[] {
+  const s = blockedForm(sender);
+  if (!s) throw new StoreError(422, "sender is an email address or @domain");
+  saveBlocked(db, blockedSenders(db).filter((x) => x !== s));
+  return blockedSenders(db);
 }
 
 /**
@@ -1466,6 +1558,12 @@ export function refreshMail(hub: Hub, opts: { owner?: boolean } = {}, now: Date 
         if (found.sentAt) db.prepare("UPDATE mailboxes SET sent_at = ? WHERE account = ?").run(found.sentAt, account);
         if (r.kept || r.gone || found.more) console.log(`[mail-inbox] ${mailboxLabel(hub, account)}: ${r.kept} new, ${r.gone} left the Inbox${found.more ? ", more next time" : ""}`);
         out.mailboxes.push({ email, kept: r.kept, gone: r.gone, more: found.more });
+        // Blocked senders' mail: to Spam (the fenced MOVE), before any new-mail alert looks at it.
+        const blockedNow = blockedKeys(db, blockedSenders(db), account);
+        if (blockedNow.length) {
+          const b = await moveNow(hub, blockedNow, "junk", null, now).catch((e) => { console.error(`[mail-inbox] ${mailboxLabel(hub, account)}: blocked ${errCode(e)}`); return null; });
+          if (b?.moved.length) console.log(`[mail-inbox] ${mailboxLabel(hub, account)}: ${b.moved.length} from blocked senders moved to Spam`);
+        }
         // The other folders: after the Inbox, and a folder that cannot be read does not stop the Inbox's refresh.
         if (source.listFolders) {
           try {

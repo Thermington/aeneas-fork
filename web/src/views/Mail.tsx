@@ -23,6 +23,8 @@ import {
   cardLink,
   type MailCard,
   type SearchHit,
+  type UnsubscribeOptions,
+  httpsLink,
   type MailAddress,
   whereLabel,
   type MailDraft,
@@ -704,8 +706,22 @@ function Mailboxes({ data, showKeys }: { data: MailList; showKeys: () => void })
           ))}
           <div className="muted">Opening a mail marks it read in iCloud too, and Pin flags it there (a flag in Apple Mail pins it here); Done moves it to Archive there, and Undo moves it back.</div>
           <NotifySettings />
+          <BlockedList blocked={data.blocked ?? []} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** The blocked senders (their mail goes to Spam), each with Unblock. */
+function BlockedList({ blocked }: { blocked: string[] }) {
+  const { act } = useContext(Look);
+  if (!blocked.length) return null;
+  return (
+    <div className="mailx-blocked">
+      <b>Blocked senders</b>
+      <span className="muted">Their mail goes to Spam.</span>
+      {blocked.map((b) => <div key={b} className="row"><span>{b}</span><button type="button" className="link small" onClick={() => void act((c) => c.mailUnblock(b))}>Unblock</button></div>)}
     </div>
   );
 }
@@ -1268,6 +1284,7 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
   const answer = [...m.members].reverse().find((x) => !x.mine);
   // Which writing box is open: a reply, a reply to all, or a forward of the thread's newest mail from someone else.
   const [replying, setReplying] = useState<"one" | "all" | "forward" | null>(null);
+  const [tools, setTools] = useState(false);
   const writeBtn = (k: "one" | "all" | "forward", icon: string, label: string, title: string) => (
     <button type="button" className={`mailx-act${replying === k ? " on" : ""}`} aria-expanded={replying === k} title={title} onClick={() => setReplying((x) => (x === k ? null : k))}><Icon name={icon} /><span>{label}</span></button>
   );
@@ -1288,11 +1305,13 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
       <div className="mailx-card-acts mailx-card-pad"><DoneButton m={m} labelled /><SnoozeButton m={m} labelled /><PinButton m={m} labelled />
         <button type="button" className="mailx-act" title="Mark unread, here and in your mail app" onClick={() => { close(); void act((c) => c.mailSeen(m.id, false)); }}><Icon name="dot" /><span>Mark unread</span></button>
         <MoveButtons ids={threadIds(m)} back="inbox" spam />
+        {answer && <button type="button" className={`mailx-act${tools ? " on" : ""}`} aria-expanded={tools} title="Unsubscribe from this sender's mail, or block them" onClick={() => setTools((x) => !x)}><Icon name="spam" /><span>Unsubscribe or block</span></button>}
         {answer && <button type="button" className="mailx-act" title={`All your mail with ${answer.from.address}`} onClick={() => showPerson(answer.from)}><Icon name="person" /><span>All with {personLabel(answer.from).split(/\s+/)[0]}</span></button>}
         {answer && writeBtn("one", "reply", "Reply", "Write a reply, saved to Drafts in iCloud")}
         {answer && writeBtn("all", "replyall", "Reply all", "Reply to the sender and everyone else on the mail, saved to Drafts in iCloud")}
         {answer && writeBtn("forward", "forward", "Forward", "Forward it to someone, saved to Drafts in iCloud")}
       </div>
+      {tools && answer && <SenderTools m={answer} close={() => setTools(false)} />}
       {replying && answer && (replying === "forward"
         ? <Composer key="forward" forward={answer} close={() => setReplying(null)} />
         : <Composer key={replying} reply={answer} all={replying === "all"} close={() => setReplying(null)} />)}
@@ -1457,6 +1476,68 @@ function AroundLine({ label, value, rows, waiting, set }: { label: string; value
     <div className="mailx-around">
       <textarea value={value} onChange={(e) => set(e.target.value)} rows={rows} maxLength={130} aria-label={label} placeholder={waiting ? "Suggesting…" : label} />
       <button type="button" className="link small" onClick={() => set(null)} aria-label={`Remove the ${label.toLowerCase()}`}>Remove</button>
+    </div>
+  );
+}
+
+/**
+ * Unsubscribe and Block for a mail's sender. Unsubscribe reads the mail's own ways now and says what each does: one
+ * click through Tor, or (a hub without Tor) only after the owner accepts that the sender sees the home's address; the
+ * sender's own page, opened in the browser with its host shown; or a draft to their unsubscribe address. Block sends
+ * the sender's (or their domain's) mail to Spam, now and from now on.
+ */
+function SenderTools({ m, close }: { m: MailSummary; close: () => void }) {
+  const { act } = useContext(Look);
+  const [ways, setWays] = useState<UnsubscribeOptions | null>(null);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [direct, setDirect] = useState(false);
+  useEffect(() => {
+    let live = true;
+    engine.client?.mailUnsubscribeOptions(m.id).then((w) => { if (live) setWays(w); }).catch((e) => { if (live) setErr(plainError(e)); });
+    return () => { live = false; };
+  }, [m.id]);
+  const run = async (f: () => Promise<string>) => {
+    setBusy(true); setErr(""); setMsg("");
+    try { setMsg(await f()); } catch (e) { setErr(plainError(e)); }
+    setBusy(false);
+  };
+  const domain = m.from.address.split("@")[1] ?? "";
+  const linkHost = ways?.link ? httpsLink(ways.link)?.host : undefined;
+  return (
+    <div className="mailx-compose mailx-card-pad" role="group" aria-label="Unsubscribe or block">
+      <b>Unsubscribe</b>
+      {!ways && !err && <span className="muted small">Reading the mail's unsubscribe links</span>}
+      {ways && !ways.one_click && !ways.link && !ways.mailto && <span className="muted small">This mail has no unsubscribe link. You can block the sender instead.</span>}
+      {ways?.one_click && (
+        <div className="mailx-compose-acts">
+          {ways.tor || direct
+            ? <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => { const r = await engine.client!.mailUnsubscribe(m.id, "one_click", !ways.tor); return r.via === "tor" ? "Unsubscribed, through Tor." : "Unsubscribed."; })}>Unsubscribe</button>
+            : <button type="button" disabled={busy} onClick={() => setDirect(true)}>Unsubscribe…</button>}
+          <span className="muted small">{ways.tor ? `Your hub tells ${ways.one_click.host} through Tor, so it does not see your home's internet address.` : direct ? `Your hub will contact ${ways.one_click.host}, which then sees your home's internet address. Press Unsubscribe to go ahead.` : `One click: your hub contacts ${ways.one_click.host}.`}</span>
+        </div>
+      )}
+      {ways?.link && linkHost && (
+        <div className="mailx-compose-acts">
+          <button type="button" onClick={() => void openExternal(ways.link!)}>Open their unsubscribe page</button>
+          <span className="muted small">Opens {linkHost} in your browser.</span>
+        </div>
+      )}
+      {ways?.mailto && (
+        <div className="mailx-compose-acts">
+          <button type="button" disabled={busy} onClick={() => void run(async () => { await engine.client!.mailUnsubscribe(m.id, "mailto"); return `A mail to ${ways.mailto!.to} is in Drafts: send it from Apple Mail.`; })}>Write the unsubscribe mail</button>
+          <span className="muted small">To {ways.mailto.to}, saved in Drafts for you to send.</span>
+        </div>
+      )}
+      <b>Block</b>
+      <div className="mailx-compose-acts">
+        <button type="button" disabled={busy} onClick={() => void run(async () => { const r = await engine.client!.mailBlock(m.from.address); await act(async () => undefined); return `Blocked ${m.from.address}: ${r.moved} moved to Spam, and their new mail goes there too.`; })}>Block {m.from.address}</button>
+        {domain && <button type="button" disabled={busy} onClick={() => void run(async () => { const r = await engine.client!.mailBlock(`@${domain}`); await act(async () => undefined); return `Blocked everyone at ${domain}: ${r.moved} moved to Spam.`; })}>Block everyone at {domain}</button>}
+      </div>
+      {msg && <div className="small" role="status">{msg}</div>}
+      {err && <div className="error small" role="alert">{err}</div>}
+      <div><button type="button" className="link small" onClick={close}>Close</button></div>
     </div>
   );
 }

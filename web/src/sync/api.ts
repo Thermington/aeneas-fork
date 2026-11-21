@@ -6,7 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
-import type { BundleDelivery, CustomBundle, FolderMail, SearchHit, MailAttachment, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
+import type { BundleDelivery, CustomBundle, FolderMail, SearchHit, UnsubscribeOptions, MailAttachment, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -1031,6 +1031,20 @@ export class HubClient {
       throw new HubError(res.status, msg);
     }
     return res.blob();
+  }
+  /** The ways a mail offers to unsubscribe, read from it now; then one of them (`direct`: the owner accepted no Tor). */
+  mailUnsubscribeOptions(id: string) {
+    return this.req<UnsubscribeOptions>("GET", `/mail/messages/${encodeURIComponent(id)}/unsubscribe`);
+  }
+  mailUnsubscribe(id: string, how: "one_click" | "mailto", direct = false) {
+    return this.req<{ ok: boolean; via?: "tor" | "direct"; draft?: boolean }>("POST", `/mail/messages/${encodeURIComponent(id)}/unsubscribe`, { how, ...(direct ? { direct: true } : {}) });
+  }
+  /** Block or unblock a sender: an address, or @domain. */
+  mailBlock(sender: string) {
+    return this.req<{ blocked: string[]; moved: number }>("POST", "/mail/settings/blocked", { sender });
+  }
+  mailUnblock(sender: string) {
+    return this.req<{ blocked: string[] }>("POST", "/mail/settings/unblock", { sender });
   }
   /** Every kept mail with each word of `q` (whole texts, Inbox and folders), or all mail with one person (`with`). */
   mailSearch(q: string, withPerson = "") {

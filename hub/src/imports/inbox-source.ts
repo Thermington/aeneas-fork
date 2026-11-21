@@ -82,6 +82,8 @@ export interface InboxSource {
   attachments?(hub: Hub, account: string, ref: MoveRef): Promise<(import("./icloud.js").MailAttachment & { preview?: string })[] | null>;
   /** A kept message's To and Cc now (Reply all), read-only; null when it is gone. */
   recipients?(hub: Hub, account: string, ref: MoveRef): Promise<{ to: MailAddress[]; cc: MailAddress[]; answers: string[]; in_reply_to: string | null } | null>;
+  /** A kept message's List-Unsubscribe headers now (read-only); null when it is gone. */
+  unsubscribeHeaders?(hub: Hub, account: string, ref: MoveRef): Promise<{ header: string; post: string } | null>;
   /** One attachment's bytes for a download (read-only, never kept); null when the message or the part is gone. */
   attachment?(hub: Hub, account: string, ref: MoveRef, part: string): Promise<{ name: string; bytes: Buffer } | null>;
   /** Save a draft (an RFC 5322 message, mail-compose.ts) to the mailbox's Drafts folder; it throws when not saved. Never sends. */

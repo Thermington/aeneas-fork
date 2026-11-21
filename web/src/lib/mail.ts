@@ -325,7 +325,7 @@ export type MoveTarget = "inbox" | "trash" | "junk" | string;
 export interface MailMovedTo extends MailMoved { to: Record<string, string> }
 
 /** `logos`: the verified brand logos the messages use, by domain (a message's `logo_domain`). */
-export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify; folders?: MailFolder[] }
+export interface MailList { messages: MailSummary[]; mailboxes: MailMailbox[]; logos?: Record<string, string>; snooze_times?: SnoozeTimes; bundle_delivery?: Record<string, BundleDelivery>; custom_bundles?: CustomBundle[]; mail_notify?: MailNotify; folders?: MailFolder[]; blocked?: string[] }
 
 /** Which new mail notifies (mail from people; bundles switched on, while they show as mail arrives) and what it says. */
 export interface MailNotify { people: boolean; bundles: string[]; detail: "full" | "sender" | "count" }
@@ -466,6 +466,9 @@ export type SearchHit = MailSummary & { where: MailState | FolderRole; folder_na
 const WHERE: Record<string, string> = { inbox: "Inbox", snoozed: "Snoozed", done: "Done", sent: "Sent", drafts: "Drafts", junk: "Spam", trash: "Trash", folder: "Folder" };
 /** Where a hit is, as the screen names it ("Inbox", "Spam", the owner's folder's name); the owner's reply in a thread is "Your reply". */
 export const whereLabel = (h: Pick<SearchHit, "where" | "folder_name" | "state">) => (h.where === "own" ? h.folder_name || "Folder" : h.where === "sent" && h.state === "sent" ? "Your reply" : WHERE[h.where] ?? "Mail");
+
+/** How a mail can be unsubscribed from (GET /mail/messages/:id/unsubscribe), and whether this hub goes through Tor. */
+export interface UnsubscribeOptions { one_click?: { host: string }; link?: string; mailto?: { to: string; subject: string }; tor: boolean }
 
 /** A size as people read it: 820 KB, 2.4 MB. */
 export function fileSize(n: number): string {

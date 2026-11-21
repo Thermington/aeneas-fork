@@ -1759,3 +1759,6 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-hits-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 15px; margin: 0 0 8px 4px; }
 .mailx-hits-head .link { margin-left: auto; }
 .mailx-hits .who .chip { min-height: 0; padding: 1px 7px; line-height: 16px; flex: none; }
+/* Blocked senders in the info panel. */
+.mailx-blocked { display: flex; flex-direction: column; gap: 4px; }
+.mailx-blocked .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
