@@ -4,11 +4,11 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import type { Hub } from "./hub.js";
-import { icloudInbox, INBOX_DAYS, type FolderListing, type FolderRole, type MailAttachment } from "./imports/icloud.js";
+import { icloudInbox, imapInbox, INBOX_DAYS, type FolderListing, type FolderRole, type MailAttachment } from "./imports/icloud.js";
 import type { InboxMail, InboxSource, MailAddress } from "./imports/inbox-source.js";
 
-/** Where the Mail screen's mail comes from (imports/inbox-source.ts): iCloud today; a Gmail source is one more entry. */
-export const INBOX_SOURCES: InboxSource[] = [icloudInbox];
+/** Where the Mail screen's mail comes from (imports/inbox-source.ts): iCloud, and other IMAP accounts (Gmail among them). */
+export const INBOX_SOURCES: InboxSource[] = [icloudInbox, imapInbox];
 /** The source an account key belongs to, by its prefix. */
 export const sourceOf = (account: string) => INBOX_SOURCES.find((s) => account.startsWith(s.prefix)) ?? null;
 import { mailboxLabel } from "./mail-filer.js";
@@ -1259,7 +1259,7 @@ export async function saveMailDraft(hub: Hub, body: Record<string, unknown>): Pr
     const all = INBOX_SOURCES.flatMap((s) => s.accounts(hub));
     const from = typeof body.from === "string" ? body.from.trim().toLowerCase() : "";
     account = from ? all.find((a) => a.slice(a.indexOf(":") + 1) === from) : all[0];
-    if (!account) throw new StoreError(from ? 422 : 409, from ? "that address is not a linked mailbox" : "link an iCloud mailbox first");
+    if (!account) throw new StoreError(from ? 422 : 409, from ? "that address is not a linked mailbox" : "link a mailbox first");
   }
   const source = sourceOf(account);
   if (!source?.saveDraft) throw new StoreError(409, "this mailbox cannot keep drafts from Aeneas");

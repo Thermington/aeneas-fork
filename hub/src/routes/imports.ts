@@ -9,7 +9,7 @@ import { listImports, stopImport, textImport, uploadImport } from "../imports/bu
 import { atlassianReturn, atlassianSignIn, atlassianSpaces, disconnectAtlassian, setAtlassianApp, setAtlassianSpaces, syncConfluence } from "../imports/confluence.js";
 import { applicationsList, filmsLibrary, gamesLibrary } from "../imports/library.js";
 import { checkGoogleApp, disconnectGoogle, googleReturn, googleSignIn, listMail, mailCounts, setGoogleApp } from "../imports/gmail.js";
-import { icloudSource, linkICloud, unlinkICloud } from "../imports/icloud.js";
+import { icloudSource, linkICloud, linkImap, unlinkICloud, unlinkImap } from "../imports/icloud.js";
 import { guideFor, parseGuideService } from "../guides.js";
 import { hubAddress } from "../setup.js";
 import { mailboxLabel, mailReading, mailSchedule, readMailNow } from "../mail-filer.js";
@@ -94,6 +94,21 @@ export function importRoutes() {
     const view = unlinkICloud(hub, email);
     // The Mail screen's messages from it go at once, whichever modules are on.
     deleteMailbox(hub.mailDb, `icloud:${email}`);
+    return c.json(view);
+  });
+
+  // Other mail accounts for the Mail screen (icloud.ts linkImap, since 2026-11-22): Gmail or any IMAP server, an app
+  // password checked with the server once and kept sealed; never returned.
+  r.put("/connections/imap", async (c) => {
+    const hub = c.get("hub");
+    if (!hub.modules.on("mail_inbox")) throw new StoreError(404, "Mail is off. Turn it on in Settings, Modules.");
+    return c.json(await linkImap(hub, await readJsonObject(c), () => { void refreshMail(hub).catch((e) => console.error(`[mail-inbox] ${errCode(e)}`)); }));
+  });
+  r.delete("/connections/imap/:email", (c) => {
+    const hub = c.get("hub");
+    const email = decodeURIComponent(c.req.param("email")).toLowerCase();
+    const view = unlinkImap(hub, email);
+    deleteMailbox(hub.mailDb, `imap:${email}`);
     return c.json(view);
   });
 

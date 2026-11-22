@@ -200,6 +200,8 @@ export interface Connections {
   google?: GoogleConnection;
   /** iCloud Mail, read-only, one entry per mailbox linked with an app-specific password (never sent back). Absent on older hubs. */
   icloud?: ICloudConnection;
+  /** Other mail accounts for the Mail screen (Gmail or any IMAP server), linked with an app password (never sent back). Absent on older hubs. */
+  imap?: ImapConnection;
   /** LastPass or 1Password through its CLI, for secrets in the assistant's commands. Absent on older hubs. */
   password_manager?: PasswordManagerView;
 }
@@ -247,6 +249,13 @@ export interface GoogleConnection {
 export interface ICloudConnection {
   accounts: GmailAccount[];
 }
+/** Other mail accounts (GET /connections `imap`): where each is and who signs in, never the password. */
+export interface ImapAccountView { email: string; preset: "gmail" | "imap"; host: string; port: number; user: string; linked_at: string; last_error: string | null }
+export interface ImapConnection {
+  accounts: ImapAccountView[];
+}
+/** Linking another mail account: Gmail (the hub fills in the server) or any IMAP server over TLS. */
+export type ImapLink = { email: string; password: string; user?: string } & ({ preset: "gmail" } | { preset: "imap"; host: string; port?: number });
 
 /** Calendar sync on the hub (Calendar accounts): an iCloud address, its calendars and the one new events go to. */
 export interface CalendarAccount {
@@ -713,6 +722,15 @@ export class HubClient {
   /** Unlink an iCloud mailbox: the hub deletes its password; `message` says to revoke it at account.apple.com. */
   disconnectICloud(email: string) {
     return this.req<ICloudConnection & { message: string }>("DELETE", `/connections/icloud/${encodeURIComponent(email)}`);
+  }
+
+  /** Link another mail account for the Mail screen; the hub checks it with the server once. */
+  linkImap(link: ImapLink) {
+    return this.req<ImapConnection>("PUT", "/connections/imap", link);
+  }
+  /** Unlink another mail account: the hub deletes its password and its mail on the Mail screen. */
+  disconnectImap(email: string) {
+    return this.req<ImapConnection & { message: string }>("DELETE", `/connections/imap/${encodeURIComponent(email)}`);
   }
 
   /** Calendar sync on the hub. */

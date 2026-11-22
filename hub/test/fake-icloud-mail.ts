@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import type { TestHub } from "./helpers.js";
-import { setImapFactory, type ImapClient, type ImapFolder } from "../src/imports/icloud.js";
+import { setImapFactory, type ImapClient, type ImapFolder, type ImapLogin } from "../src/imports/icloud.js";
 
 // A fake iCloud for the Mail screen's tests (icloud-inbox, mail-inbox, mail-routes). Not a test file itself.
 export const PASSWORD = "abcd-efgh-ijkl-mnop";
@@ -45,7 +45,9 @@ export const FOLDERS: ImapFolder[] = [
 /** A fake iCloud for the Mail screen: folders, messages, and a record of every call and query. */
 export function fake(messages: Msg[], opts: { password?: string; noMove?: boolean } = {}) {
   const seen = { connects: 0, logouts: 0, calls: [] as string[], opened: [] as { path: string; readOnly: unknown }[], fetches: [] as unknown[], searches: [] as Record<string, unknown>[], moves: [] as { from: string; uid: number; to: string }[], flags: [] as { uid: number; flags: string[]; add: boolean }[], appends: [] as { path: string; raw: string; flags: string[] }[], downloads: [] as string[] };
+  const logins: ImapLogin[] = [];
   setImapFactory((login) => {
+    logins.push(login);
     let open: string | null = null;
     const find = (uid: string) => messages.find((m) => m.folder === open && String(m.uid) === uid);
     const c: ImapClient = {
@@ -130,7 +132,7 @@ export function fake(messages: Msg[], opts: { password?: string; noMove?: boolea
     };
     return c;
   });
-  return seen;
+  return Object.assign(seen, { logins });
 }
 
 export function linked(t: TestHub, extra: Record<string, unknown> = {}) {

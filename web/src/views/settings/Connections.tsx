@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { engine } from "../../sync/engine";
-import type { AtlassianConnection, AtlassianSpace, CalendarSyncView, Connections as ConnectionsView, GmailAccount, GoogleConnection, ICloudConnection, KeePassEntry, PasswordManagerProvider, PasswordManagerStatus, PasswordManagerView } from "../../sync/api";
+import type { AtlassianConnection, AtlassianSpace, CalendarSyncView, Connections as ConnectionsView, GmailAccount, GoogleConnection, ICloudConnection, ImapConnection, KeePassEntry, PasswordManagerProvider, PasswordManagerStatus, PasswordManagerView } from "../../sync/api";
 import { spacesChanged } from "../../lib/wiki";
 import { fmtDateTime } from "../../lib/time";
 import { META } from "../../sync/db";
@@ -15,7 +15,7 @@ type Msg = { ok: boolean; text: string } | null;
 /** One line for the Settings list: which accounts are linked. */
 export function connectionsSummary(c: ConnectionsView | null): string {
   if (!c) return "Gmail, iCloud Mail, Steam, Letterboxd, Confluence, Apple Health";
-  const on = [c.google?.accounts.length && "Gmail", c.icloud?.accounts.length && "iCloud Mail", c.steam.connected && "Steam", c.letterboxd.connected && "Letterboxd", c.atlassian?.connected && "Confluence", c.health.last_import && "Apple Health"].filter(Boolean);
+  const on = [c.google?.accounts.length && "Gmail", c.icloud?.accounts.length && "iCloud Mail", c.imap?.accounts.length && "Other mail", c.steam.connected && "Steam", c.letterboxd.connected && "Letterboxd", c.atlassian?.connected && "Confluence", c.health.last_import && "Apple Health"].filter(Boolean);
   return on.length ? on.join(", ") : "None linked yet";
 }
 
@@ -480,6 +480,94 @@ function Health({ c }: { c: ConnectionsView["health"] }) {
  * every device has them. The password is the same app-specific one iCloud Mail uses, so an address linked there needs
  * none here.
  */
+/**
+ * Other mail accounts for the Mail screen (since 2026-11-22): Gmail, or any provider that offers IMAP and app
+ * passwords. The hub checks the password with the server once and keeps it sealed; it is never shown again.
+ */
+function OtherMail({ c, reload }: { c: ImapConnection; reload: () => void }) {
+  const client = engine.client;
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<Msg>(null);
+  const [preset, setPreset] = useState<"gmail" | "imap">("gmail");
+  const [email, setEmail] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("993");
+  const [user, setUser] = useState("");
+  const [password, setPassword] = useState("");
+  const run = async (f: () => Promise<string>) => {
+    setBusy(true);
+    setMsg(null);
+    try { setMsg({ ok: true, text: await f() }); } catch (e) { setMsg({ ok: false, text: errorText(e) }); } finally { reload(); setBusy(false); }
+  };
+  const ready = !!email.trim() && !!password.trim() && (preset === "gmail" || !!host.trim());
+  return (
+    <section className="card col">
+      <h2>Other mail accounts</h2>
+      <div className="muted small">
+        Gmail, or any mail provider that offers IMAP and app passwords, shown in <a href="#/mail">Mail</a> beside iCloud. The hub signs in with an app password you make for it, never your account's own password, and keeps it only on your hub. Mail is handled as for iCloud: only what you open is marked read, and Done moves a mail to the account's Archive (Gmail's All Mail).
+      </div>
+      {c.accounts.map((a) => (
+        <div key={a.email} className="col" style={{ gap: 2 }}>
+          <div><strong>{a.email}</strong> <span className="muted small">{a.preset === "gmail" ? "Gmail" : `${a.host}:${a.port}`}{a.user !== a.email ? `, signs in as ${a.user}` : ""}</span></div>
+          {a.last_error && <div className="error small">{a.last_error}</div>}
+          <div>
+            <button type="button" className="ghost danger" disabled={busy || !client} onClick={() => confirm(`Unlink ${a.email}? Its password is deleted from the hub and so is its mail on the Mail screen; the mail itself stays with your provider.`) && void run(async () => (await client!.disconnectImap(a.email)).message)}>
+              Unlink
+            </button>
+          </div>
+        </div>
+      ))}
+      <form className="col" onSubmit={(e) => {
+        e.preventDefault();
+        void run(async () => {
+          const base = { email: email.trim(), password: password.trim(), ...(user.trim() ? { user: user.trim() } : {}) };
+          await client!.linkImap(preset === "gmail" ? { ...base, preset } : { ...base, preset, host: host.trim(), port: Number(port) || 993 });
+          setPassword("");
+          return "Linked. Its Inbox comes into Mail now.";
+        });
+      }}>
+        <div className="row wrap" role="radiogroup" aria-label="Kind of account">
+          <label className="toggle-row"><input type="radio" name="imap-preset" checked={preset === "gmail"} onChange={() => setPreset("gmail")} /> <span>Gmail</span></label>
+          <label className="toggle-row"><input type="radio" name="imap-preset" checked={preset === "imap"} onChange={() => setPreset("imap")} /> <span>Another provider (IMAP)</span></label>
+        </div>
+        <div className="muted small">
+          {preset === "gmail"
+            ? <>Turn on 2-Step Verification for your Google Account, then make an app password named Aeneas at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">myaccount.google.com/apppasswords</a>. Google shows it once, as 16 letters.</>
+            : <>Your provider's help pages give its IMAP server and port, and where to make an app password. The hub connects with TLS only (most often port 993), and only to servers on the internet, never one on your own network.</>}
+        </div>
+        <label className="col small" style={{ gap: 2 }}>
+          Email address
+          <input type="email" autoComplete="off" spellCheck={false} value={email} onChange={(e) => setEmail(e.target.value)} placeholder={preset === "gmail" ? "you@gmail.com" : "you@example.com"} />
+        </label>
+        {preset === "imap" && (
+          <div className="row wrap" style={{ gap: 8 }}>
+            <label className="col small" style={{ gap: 2, flex: "1 1 220px" }}>
+              IMAP server
+              <input autoComplete="off" spellCheck={false} value={host} onChange={(e) => setHost(e.target.value)} placeholder="imap.example.com" />
+            </label>
+            <label className="col small" style={{ gap: 2, width: 90 }}>
+              Port
+              <input inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ""))} placeholder="993" />
+            </label>
+          </div>
+        )}
+        {preset === "imap" && (
+          <label className="col small" style={{ gap: 2 }}>
+            Username (if it is not the address)
+            <input autoComplete="off" spellCheck={false} value={user} onChange={(e) => setUser(e.target.value)} placeholder={email.trim() || "the address"} />
+          </label>
+        )}
+        <label className="col small" style={{ gap: 2 }}>
+          App password
+          <input type="password" autoComplete="off" spellCheck={false} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={preset === "gmail" ? "abcd efgh ijkl mnop" : ""} />
+        </label>
+        <div><button type="submit" className="primary" disabled={busy || !client || !ready}>{busy ? "Checking" : "Link"}</button></div>
+      </form>
+      <Status msg={msg} />
+    </section>
+  );
+}
+
 function ICloudCalendar({ mailAccounts }: { mailAccounts: string[] }) {
   const client = engine.client;
   const ready = useHubReady();
@@ -918,6 +1006,7 @@ export function ConnectionsPage() {
         <>
           {on("mail") && c.google && <Gmail c={c.google} reload={reload} />}
           {(on("mail") || on("mail_inbox")) && c.icloud && <ICloudMail c={c.icloud} receipts={on("mail")} chat={on("mail_inbox")} reading={!!c.google?.reading} reload={reload} />}
+          {on("mail_inbox") && c.imap && <OtherMail c={c.imap} reload={reload} />}
           {on("games") && <Steam c={c.steam} reload={reload} />}
           {on("films") && <Letterboxd c={c.letterboxd} reload={reload} />}
           {on("wiki") && c.atlassian && <Confluence c={c.atlassian} reload={reload} />}

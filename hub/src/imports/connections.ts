@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AtlassianConn } from "./confluence.js";
 import type { GoogleAccount } from "./gmail.js";
-import type { ICloudAccount } from "./icloud.js";
+import type { ICloudAccount, ImapAccount } from "./icloud.js";
 import type { PasswordManagerConn } from "../secrets.js";
 import type { SecretBox } from "../secretbox.js";
 
@@ -17,7 +17,7 @@ import type { SecretBox } from "../secretbox.js";
 export interface SteamConn { api_key?: string; steam_id: string; persona?: string; profile_url?: string; last_sync?: string; last_error?: string; games?: number }
 export interface LetterboxdConn { username?: string; last_sync?: string; last_error?: string; films?: number }
 export interface HealthConn { last_import?: string; samples?: number; total?: number }
-export interface Connections { steam_key?: string; steam?: SteamConn; letterboxd?: LetterboxdConn; health?: HealthConn; atlassian_app?: { client_id: string; client_secret: string }; atlassian?: AtlassianConn; google_app?: { client_id: string; client_secret: string }; google?: GoogleAccount[]; icloud?: ICloudAccount[]; password_manager?: PasswordManagerConn; keepass?: { password: string; created_at: string };
+export interface Connections { steam_key?: string; steam?: SteamConn; letterboxd?: LetterboxdConn; health?: HealthConn; atlassian_app?: { client_id: string; client_secret: string }; atlassian?: AtlassianConn; google_app?: { client_id: string; client_secret: string }; google?: GoogleAccount[]; icloud?: ICloudAccount[]; imap?: ImapAccount[]; password_manager?: PasswordManagerConn; keepass?: { password: string; created_at: string };
   /** The master password of helper-passwords.kdbx (helpers.ts): passwords this person saved for their helper. */
   helper_vault?: { password: string; created_at: string };
   /** People this hub's owner helps with their devices (helping.ts): each one's hub on this machine and the key to it. */
@@ -107,6 +107,10 @@ export class ConnectionStore {
       // Each field named on its own, so the password can never ride along.
       icloud: {
         accounts: (c.icloud ?? []).filter((a) => a.mail !== false).map((a) => ({ email: a.email, linked_at: a.linked_at, last_sync: a.last_sync ?? null, last_error: a.last_error ?? null })),
+      },
+      // Other mail accounts (since 2026-11-22): where they are and who signs in, never the password.
+      imap: {
+        accounts: (c.imap ?? []).map((a) => ({ email: a.email, preset: a.preset, host: a.host, port: a.port, user: a.user, linked_at: a.linked_at, last_error: a.last_error ?? null })),
       },
     };
   }

@@ -1,4 +1,6 @@
 import { ImapFlow } from "imapflow";
+import dns from "node:dns";
+import { isNonPublicAddress } from "../ai/web.js";
 import { nowIso } from "@everythingapp/shared";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
@@ -23,6 +25,14 @@ export type { InboxMail, MailAddress, MoveRef } from "./inbox-source.js";
  * and setSeenICloud (opening a mail or Mark unread: the `\Seen` flag added or removed, no other flag). Only text parts are fetched, capped,
  * and for the Mail screen the pictures a mail's HTML shows from inside it (`cid:`), never other attachments. For receipts, mail is read in memory and never stored, as for Gmail; the Mail screen's listing
  * (listInboxICloud) hands the Inbox's mail to mail-inbox.ts, which keeps its text while it is in the Inbox.
+ *
+ * Other mail accounts (since 2026-11-22): the same IMAP code reads any mailbox the owner links with a server, a port,
+ * a username and an app password (`imap:` accounts, `connections.imap`), Gmail as a preset (imap.gmail.com). Only the
+ * Mail screen reads them (not Mail receipts or calendars). The fences above hold for them too; on top: TLS on connect
+ * always (no plain or STARTTLS port), certificates checked against the server's name, and the server's address looked
+ * up and refused when it is on the owner's own network (a mistyped or planted server cannot point the hub inside the
+ * home), the connection then made to that checked address. Brand logos stay iCloud's only: they trust a verdict
+ * iCloud writes on each mail, which another server does not write and a sender could forge there.
  */
 
 const HOST = "imap.mail.me.com";
@@ -99,7 +109,8 @@ export interface ImapClient {
   /** Each message's flags (`FETCH FLAGS`, which reads and changes nothing): only the Mail screen asks, for read and unread. */
   fetch?(range: string, query: { uid: true; flags: true }, options: { uid: true }): AsyncIterable<{ uid: number; flags?: Set<string> }>;
 }
-export interface ImapLogin { user: string; pass: string }
+/** Who signs in, and where: iCloud when `host` is absent. `name` is the provider's name in the hub's messages. */
+export interface ImapLogin { user: string; pass: string; host?: string; port?: number; servername?: string; name?: string }
 /**
  * What moveICloud may ask of a server besides reading, and only it: open a folder read-write (SELECT) and MOVE
  * messages out of it. Never a STORE, COPY, APPEND, EXPUNGE or delete: those are not in the type.
@@ -115,7 +126,9 @@ export interface ImapMover {
 }
 
 const realClient = (login: ImapLogin): ImapClient => new ImapFlow({
-  host: HOST, port: PORT, secure: true, auth: login,
+  host: login.host ?? HOST, port: login.port ?? PORT, secure: true, auth: { user: login.user, pass: login.pass },
+  // Connected to a checked address (publicAddress), the certificate is still checked against the server's name.
+  ...(login.servername ? { servername: login.servername } : {}),
   // imapflow's own logger would write the conversation with the server, addresses included.
   logger: false,
   connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 60_000,
@@ -130,14 +143,16 @@ export function setImapFactory(f: ((login: ImapLogin) => ImapClient) | null) {
 
 /** iCloud refused the address and password: told apart from a server out of reach, which is tried again later. */
 export class ICloudRefused extends StoreError {
-  constructor() { super(422, "iCloud did not accept this address and app-specific password. Check both, or make a new app-specific password at account.apple.com."); }
+  constructor(message = "iCloud did not accept this address and app-specific password. Check both, or make a new app-specific password at account.apple.com.") { super(422, message); }
 }
 
 /** The hub's own words for a failure: never the server's, which can repeat the address or the password's owner. */
-function failure(e: unknown): StoreError {
+function failure(e: unknown, name = "iCloud Mail"): StoreError {
   if (e instanceof StoreError) return e;
-  if ((e as { authenticationFailed?: boolean })?.authenticationFailed) return new ICloudRefused();
-  return new StoreError(502, "iCloud Mail could not be reached from the hub, or stopped answering. Check the hub's internet connection and try again.");
+  if ((e as { authenticationFailed?: boolean })?.authenticationFailed) {
+    return name === "iCloud Mail" ? new ICloudRefused() : new ICloudRefused(`${name} did not accept this username and app password. Check both, or make a new app password with your mail provider.`);
+  }
+  return new StoreError(502, `${name} could not be reached from the hub, or stopped answering. Check the server's name and port and the hub's internet connection, and try again.`);
 }
 
 /**
@@ -151,7 +166,8 @@ export function setICloudDeadlines(d: Partial<typeof DEADLINES> | null) {
 
 /** One connection for one job, closed at the end whatever happens, and given up at its deadline. */
 async function withClient<T>(login: ImapLogin, deadlineMs: number, job: (c: ImapClient) => Promise<T>): Promise<T> {
-  const c = makeClient(login);
+  const name = login.name ?? "iCloud Mail";
+  const c = makeClient(login.host && login.host !== HOST ? { ...login, host: await publicAddress(login.host), servername: login.host } : login);
   let timer: NodeJS.Timeout | undefined;
   const run = (async () => { await c.connect(); return job(c); })();
   run.catch(() => {}); // after the deadline it ends on its own, as the connection is closed under it
@@ -159,12 +175,12 @@ async function withClient<T>(login: ImapLogin, deadlineMs: number, job: (c: Imap
     return await Promise.race([run, new Promise<never>((_, fail) => {
       timer = setTimeout(() => {
         try { c.close(); } catch { /* closed already */ }
-        fail(new StoreError(502, "iCloud Mail stopped answering in time. The hub tries again later."));
+        fail(new StoreError(502, `${name} stopped answering in time. The hub tries again later.`));
       }, deadlineMs);
       timer.unref?.();
     })]);
   } catch (e) {
-    throw failure(e);
+    throw failure(e, name);
   } finally {
     clearTimeout(timer);
     await c.logout().catch(() => { try { c.close(); } catch { /* closed already */ } });
@@ -175,16 +191,67 @@ async function withClient<T>(login: ImapLogin, deadlineMs: number, job: (c: Imap
 // Accounts
 
 const accountName = (email: string) => `${PREFIX}${email}`;
-const emailOf = (account: string) => account.slice(PREFIX.length);
 
-function account(hub: Hub, email: string): ICloudAccount {
-  const a = hub.connections.get().icloud?.find((x) => x.email === email);
-  if (!a) throw new StoreError(404, "that iCloud mailbox is not linked");
+/** The start of another mail account's key (`imap:robin@fastmail.com`), its mailbox in `connections.imap`. */
+export const IMAP_PREFIX = "imap:";
+const isImapKey = (key: string) => key.startsWith(IMAP_PREFIX);
+
+/** A mailbox on another server (since 2026-11-22): where it is and who signs in, besides what an iCloud one keeps. */
+export interface ImapAccount extends ICloudAccount {
+  /** `gmail` (imap.gmail.com, an app password Google shows), or `imap` (the server the owner typed). */
+  preset: "gmail" | "imap";
+  host: string;
+  port: number;
+  /** The username the server takes, most often the address itself. */
+  user: string;
+}
+
+/** The presets: the server filled in for the owner. */
+export const IMAP_PRESETS = { gmail: { host: "imap.gmail.com", port: 993, name: "Gmail" } } as const;
+
+/** A linked mailbox by its key (`icloud:…` or `imap:…`). */
+function account(hub: Hub, key: string): ICloudAccount & Partial<ImapAccount> {
+  const c = hub.connections.get();
+  const a = isImapKey(key) ? c.imap?.find((x) => x.email === key.slice(IMAP_PREFIX.length)) : c.icloud?.find((x) => x.email === key.slice(PREFIX.length));
+  if (!a) throw new StoreError(404, "that mailbox is not linked");
   return a;
 }
 
-function saveAccount(hub: Hub, email: string, fields: Partial<ICloudAccount>) {
-  hub.connections.update((c) => { const a = c.icloud?.find((x) => x.email === email); if (a) Object.assign(a, fields); });
+function saveAccount(hub: Hub, key: string, fields: Partial<ICloudAccount>) {
+  hub.connections.update((c) => {
+    const a = isImapKey(key) ? c.imap?.find((x) => x.email === key.slice(IMAP_PREFIX.length)) : c.icloud?.find((x) => x.email === key.slice(PREFIX.length));
+    if (a) Object.assign(a, fields);
+  });
+}
+
+/** The provider's name in the hub's words: iCloud Mail, Gmail, or the server's name. */
+const providerName = (a: Partial<ImapAccount>) => (!a.host ? "iCloud Mail" : a.preset === "gmail" ? "Gmail" : a.host);
+
+/** How to sign in to a linked mailbox. */
+const loginOf = (a: ICloudAccount & Partial<ImapAccount>): ImapLogin =>
+  a.host ? { user: a.user ?? a.email, pass: a.password, host: a.host, port: a.port ?? PORT, name: providerName(a) } : { user: a.email, pass: a.password };
+
+/** What a paused mailbox says: iCloud's own words, or the same for another provider. */
+const refusedText = (a: Partial<ImapAccount>) => (!a.host ? REFUSED
+  : `${providerName(a)} refused this mailbox's app password (it was revoked, or the account changed). The hub stopped signing in so your account is not locked. Make a new app password and link the mailbox again, or press Refresh in Mail to try this one once more.`);
+
+/** How a server's name is looked up (tests swap it). */
+let lookupAll: (host: string) => Promise<{ address: string }[]> = (host) => dns.promises.lookup(host, { all: true });
+export function setMailLookup(f: ((host: string) => Promise<{ address: string }[]>) | null) {
+  lookupAll = f ?? ((host) => dns.promises.lookup(host, { all: true }));
+}
+
+/**
+ * The address to connect to for a server the owner named: its first address, when none of them is on the owner's own
+ * network (private, loopback, link-local and the like, ai/web.ts isNonPublicAddress). Looked up at each connection and
+ * connected to as looked up, so a name cannot answer a public address to the check and a private one to the connection.
+ */
+async function publicAddress(host: string): Promise<string> {
+  let found: { address: string }[];
+  try { found = await lookupAll(host); } catch { throw new StoreError(422, `The hub could not find the mail server ${host}. Check its name.`); }
+  if (!found.length) throw new StoreError(422, `The hub could not find the mail server ${host}. Check its name.`);
+  if (found.some((x) => isNonPublicAddress(x.address))) throw new StoreError(422, `${host} is on your own network. The hub links mail servers on the internet only.`);
+  return found[0].address;
 }
 
 /** An app-specific password as Apple shows it, or null when `v` is not one (an Apple ID password never is). */
@@ -210,12 +277,57 @@ export async function linkICloud(hub: Hub, body: Record<string, unknown>, read: 
   return hub.connections.view().icloud;
 }
 
+/**
+ * Link another mail account (the Mail screen's, since 2026-11-22): Gmail (the preset fills in the server) or any IMAP
+ * server on port 993 or another TLS port. Checked with the server once, kept sealed like iCloud's, never returned.
+ */
+export async function linkImap(hub: Hub, body: Record<string, unknown>, read: (account: string) => void = () => {}) {
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new StoreError(422, "email is the mailbox's address");
+  if (hub.connections.get().icloud?.some((a) => a.email === email && a.mail !== false)) throw new StoreError(409, "that address is already linked as an iCloud mailbox");
+  const preset = body.preset === "gmail" ? "gmail" : "imap";
+  let host: string, port: number, password: string | null;
+  if (preset === "gmail") {
+    ({ host, port } = IMAP_PRESETS.gmail);
+    password = appPassword(body.password);
+    if (!password) throw new StoreError(422, "password is an app password made in your Google Account (16 letters, like abcd efgh ijkl mnop), not your Google password");
+  } else {
+    host = typeof body.host === "string" ? body.host.trim().toLowerCase().replace(/\.$/, "") : "";
+    // A name, never an address typed in: the hub looks the name up and checks every address it answers.
+    if (host.length > 253 || !/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) throw new StoreError(422, "host is the mail server's name, like imap.fastmail.com");
+    port = body.port === undefined || body.port === null || body.port === "" ? 993 : Number(body.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || port === 143) throw new StoreError(422, "port is the server's IMAP port over TLS, most often 993 (143, without TLS, is not used)");
+    const p = typeof body.password === "string" ? body.password.trim() : "";
+    password = p.length >= 1 && p.length <= 200 && !/[\x00-\x1f\x7f]/.test(p) ? p : null;
+    if (!password) throw new StoreError(422, "password is the app password your mail provider made for this (at most 200 characters)");
+  }
+  const u = typeof body.user === "string" && body.user.trim() ? body.user.trim() : email;
+  if (u.length > 254 || /[\x00-\x1f\x7f]/.test(u)) throw new StoreError(422, "user is the name the server signs in with, most often the address");
+  const acct = { email, preset, host, port, user: u, password } as const;
+  await withClient(loginOf({ ...acct, linked_at: "" }), DEADLINES.check, async () => {});
+  hub.connections.update((c) => {
+    const list = (c.imap ??= []);
+    const prev = list.find((a) => a.email === email);
+    if (prev) Object.assign(prev, { ...acct, last_error: null, refused_at: null });
+    else list.push({ ...acct, linked_at: nowIso() });
+  });
+  read(`${IMAP_PREFIX}${email}`);
+  return hub.connections.view().imap;
+}
+
+/** Unlink another mail account: its password goes from the hub (the provider revokes the app password itself). */
+export function unlinkImap(hub: Hub, email: string) {
+  account(hub, `${IMAP_PREFIX}${email}`);
+  hub.connections.update((c) => { c.imap = (c.imap ?? []).filter((x) => x.email !== email); });
+  return { ...hub.connections.view().imap, message: "The mailbox is unlinked and its password deleted from the hub. To end the app password itself, revoke it with your mail provider." };
+}
+
 /** Unlink a mailbox: its password and queue go; filed records stay. The password itself is revoked only at Apple. */
 export function unlinkICloud(hub: Hub, email: string) {
-  account(hub, email);
+  account(hub, accountName(email));
   hub.db.prepare("DELETE FROM mail WHERE account = ?").run(accountName(email));
   // Calendar sync may still use the account: then only its mail stops, and the password stays for the calendars.
-  if (account(hub, email).calendar) {
+  if (account(hub, accountName(email)).calendar) {
     hub.connections.update((c) => { const a = c.icloud?.find((x) => x.email === email); if (a) a.mail = false; });
     return { ...hub.connections.view().icloud, message: "The hub stopped reading this mailbox. Its app-specific password stays on the hub because calendar sync uses it; stop calendar sync too to delete it." };
   }
@@ -245,18 +357,18 @@ function parseId(id: string): { validity: string; uid: string; folder: string } 
 
 /** List a mailbox's likely mail since it was last listed (the first time, the last BACKFILL_DAYS) and queue what is new. */
 export async function listICloud(hub: Hub, accountKey: string, now: Date = new Date(), opts: { owner?: boolean } = {}): Promise<{ listed: number; queued: number }> {
-  const email = emailOf(accountKey);
-  let a = account(hub, email);
-  if (a.refused_at && !opts.owner) throw new StoreError(409, REFUSED);
+  const email = accountKey;
+  let a = account(hub, accountKey);
+  if (a.refused_at && !opts.owner) throw new StoreError(409, refusedText(a));
   if (a.listed_to && a.query !== SEARCH_ID) {
     hub.db.prepare("DELETE FROM mail WHERE account = ? AND state = 'queued'").run(accountKey);
     saveAccount(hub, email, { listed_to: undefined });
-    a = account(hub, email);
+    a = account(hub, accountKey);
   }
   const from = a.listed_to ? new Date(Date.parse(a.listed_to) - OVERLAP_MS) : new Date(now.getTime() - BACKFILL_DAYS * 86400_000);
   const ids: string[] = [];
   try {
-    await withClient({ user: a.email, pass: a.password }, DEADLINES.list, async (c) => {
+    await withClient(loginOf(a), DEADLINES.list, async (c) => {
       for (const f of mailFolders(await c.list())) {
         const box = await c.mailboxOpen(f.path, { readOnly: true });
         const uids = (await c.search(searchQuery(from), { uid: true })) || [];
@@ -266,7 +378,7 @@ export async function listICloud(hub: Hub, accountKey: string, now: Date = new D
     });
   } catch (e) {
     const f = failure(e);
-    if (f instanceof ICloudRefused) saveAccount(hub, email, { last_sync: nowIso(), last_error: REFUSED, refused_at: nowIso() });
+    if (f instanceof ICloudRefused) saveAccount(hub, email, { last_sync: nowIso(), last_error: refusedText(a), refused_at: nowIso() });
     else saveAccount(hub, email, { last_sync: nowIso(), last_error: f.message });
     throw f;
   }
@@ -321,10 +433,10 @@ async function downloadText(c: ImapClient, uid: string, msg: ImapMessage): Promi
 export async function readICloud(hub: Hub, accountKey: string, id: string): Promise<FetchedMail | null> {
   const ref = parseId(id);
   if (!ref) return null;
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
-  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
+  return withClient(loginOf(a), DEADLINES.read, async (c) => {
     let box: { uidValidity: bigint };
     try { box = await c.mailboxOpen(ref.folder, { readOnly: true }); }
     catch (e) {
@@ -347,7 +459,7 @@ export async function readICloud(hub: Hub, accountKey: string, id: string): Prom
       message_id: env.messageId,
     };
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_sync: nowIso(), last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_sync: nowIso(), last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
@@ -456,7 +568,7 @@ const mailAddress = (a: ImapAddress | undefined): MailAddress => ({ name: (a?.na
 const bareId = (v: string | undefined | null) => messageIds(v, 1)[0] ?? null;
 
 /** What the Mail screen keeps of one fetched message. */
-function inboxMail(id: string, msg: ImapMessage, text: string, shown: { html: string; remote: string[]; pictures?: number } | null = null): InboxMail {
+function inboxMail(id: string, msg: ImapMessage, text: string, shown: { html: string; remote: string[]; pictures?: number } | null = null, trustLogo = true): InboxMail {
   const env = msg.envelope ?? {};
   const from = mailAddress(env.from?.[0]);
   const replyTo = mailAddress(env.replyTo?.[0]).address;
@@ -478,7 +590,7 @@ function inboxMail(id: string, msg: ImapMessage, text: string, shown: { html: st
     // HTML_MAX is for the markup: the pictures sent inside the mail, written into it, have their own limit.
     html: shown && shown.html.length - (shown.pictures ?? 0) <= HTML_MAX ? shown.html : null,
     remote: shown && shown.html.length - (shown.pictures ?? 0) <= HTML_MAX ? shown.remote : [],
-    logo: verifiedLogo(msg.headers, from.address),
+    logo: trustLogo ? verifiedLogo(msg.headers, from.address) : null,
     refs: answers(msg),
     mine: false,
   };
@@ -546,9 +658,9 @@ async function shownHtml(c: ImapClient, uid: string, msg: ImapMessage, html: str
  * A refused password pauses the mailbox exactly as for receipts; `owner` (the Refresh button) tries it once.
  */
 export async function listInboxICloud(hub: Hub, accountKey: string, since: Date, known: (id: string) => boolean, knownMessage: (messageId: string) => boolean, opts: { owner?: boolean; needsRefs?: (id: string) => boolean; sentFrom?: string | null } = {}): Promise<InboxListing> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at && !opts.owner) throw new StoreError(409, REFUSED);
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at && !opts.owner) throw new StoreError(409, refusedText(a));
   let present: string[] | null = null;
   let seen: string[] | null = null;
   let flagged: string[] | null = null;
@@ -558,7 +670,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
   let more = false;
   let sentAt: string | undefined;
   try {
-    await withClient({ user: a.email, pass: a.password }, DEADLINES.list, async (c) => {
+    await withClient(loginOf(a), DEADLINES.list, async (c) => {
       const folders = await c.list();
       const f = inboxFolder(folders);
       if (!f) return;
@@ -589,7 +701,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
         // The same for its text: one mail the hub cannot read must not keep the rest of the Inbox from arriving.
         let text: string;
         try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
-        const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html));
+        const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html), !isImapKey(accountKey));
         // Cards from the raw HTML: cleaning takes out the sender's schema.org data (a script) with every other script.
         m.cards = mailCards(html.join("\n"), m.subject, m.text, m.from, m.automated);
         m.attachments = attachmentParts(msg.bodyStructure);
@@ -629,7 +741,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
         const { plain, html } = await downloadText(c, String(uid), msg);
         let text: string;
         try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a sent mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
-        const m = inboxMail(sid(uid), msg, text, await shownHtml(c, String(uid), msg, html));
+        const m = inboxMail(sid(uid), msg, text, await shownHtml(c, String(uid), msg, html), !isImapKey(accountKey));
         m.mine = true;
         m.automated = false;
         // The owner's own reply quotes the mail it answers, web pictures and all. Fetching those again would tell
@@ -642,7 +754,7 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
     });
   } catch (e) {
     const f = failure(e);
-    if (f instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (f instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw f;
   }
   if (a.refused_at) saveAccount(hub, email, { last_error: null, refused_at: null });
@@ -653,10 +765,10 @@ export async function listInboxICloud(hub: Hub, accountKey: string, since: Date,
 export async function originalICloud(hub: Hub, accountKey: string, id: string): Promise<{ at: Date; from: MailAddress; reply_to: string | null; subject: string; text: string } | null> {
   const ref = parseId(id);
   if (!ref) return null;
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
-  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
+  return withClient(loginOf(a), DEADLINES.read, async (c) => {
     let box: { uidValidity: bigint };
     try { box = await c.mailboxOpen(ref.folder, { readOnly: true }); }
     catch (e) { if ((e as { responseStatus?: string })?.responseStatus === "NO") return null; throw e; }
@@ -664,11 +776,11 @@ export async function originalICloud(hub: Hub, accountKey: string, id: string): 
     const msg = await c.fetchOne(ref.uid, { envelope: true, bodyStructure: true, internalDate: true }, { uid: true });
     if (!msg) return null;
     const { plain, html } = await downloadText(c, ref.uid, msg);
-    const m = inboxMail(id, msg, readingText(plain, html));
+    const m = inboxMail(id, msg, readingText(plain, html), null, !isImapKey(accountKey));
     m.text = readingText(plain, html);
     return { at: m.at, from: m.from, reply_to: m.reply_to, subject: m.subject, text: m.text };
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
@@ -725,7 +837,7 @@ async function openKept(c: ImapClient, ref: MoveRef): Promise<{ uid: string; msg
   const at = parseId(ref.id);
   if (!at || !ref.message_id) return null;
   const folders = await c.list();
-  const allowed = new Set([inboxFolder(folders)?.path, folders.find((f) => f.specialUse === "\\Archive")?.path, ...shownFolders(folders).map((f) => f.path)].filter(Boolean));
+  const allowed = new Set([inboxFolder(folders)?.path, archiveOf(folders)?.path, ...shownFolders(folders).map((f) => f.path)].filter(Boolean));
   if (!allowed.has(at.folder)) return null;
   const box = await c.mailboxOpen(at.folder, { readOnly: true });
   if (String(box.uidValidity) !== at.validity) return null;
@@ -740,10 +852,10 @@ async function openKept(c: ImapClient, ref: MoveRef): Promise<{ uid: string; msg
  * only. Null when the message is not there any more.
  */
 export async function attachmentsICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<(MailAttachment & { preview?: string })[] | null> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
-  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
+  return withClient(loginOf(a), DEADLINES.read, async (c) => {
     const kept = await openKept(c, ref);
     if (!kept) return null;
     const list: (MailAttachment & { preview?: string })[] = attachmentParts(kept.msg.bodyStructure);
@@ -757,7 +869,7 @@ export async function attachmentsICloud(hub: Hub, accountKey: string, ref: MoveR
     }
     return list;
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
@@ -768,33 +880,33 @@ export async function attachmentsICloud(hub: Hub, accountKey: string, ref: MoveR
  * again; null when it is gone.
  */
 export async function recipientsICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<{ to: MailAddress[]; cc: MailAddress[]; answers: string[]; in_reply_to: string | null } | null> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
-  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
+  return withClient(loginOf(a), DEADLINES.read, async (c) => {
     const kept = await openKept(c, ref);
     if (!kept) return null;
     const env = kept.msg.envelope ?? {};
     const withRefs = await c.fetchOne(kept.uid, { envelope: true, bodyStructure: true, internalDate: true, headers: ["references"] }, { uid: true });
     return { to: (env.to ?? []).slice(0, 50).map(mailAddress), cc: (env.cc ?? []).slice(0, 50).map(mailAddress), answers: withRefs ? answers(withRefs) : [], in_reply_to: bareId(env.inReplyTo) };
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
 
 /** A kept message's List-Unsubscribe and List-Unsubscribe-Post headers now (read-only, checked again); null when it is gone. */
 export async function unsubscribeHeadersICloud(hub: Hub, accountKey: string, ref: MoveRef): Promise<{ header: string; post: string } | null> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
-  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
+  return withClient(loginOf(a), DEADLINES.read, async (c) => {
     const kept = await openKept(c, ref);
     if (!kept) return null;
     const m = await c.fetchOne(kept.uid, { envelope: true, bodyStructure: true, internalDate: true, headers: ["list-unsubscribe", "list-unsubscribe-post"] }, { uid: true });
     return m ? { header: headerValue(m.headers, "list-unsubscribe"), post: headerValue(m.headers, "list-unsubscribe-post") } : null;
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
@@ -804,10 +916,10 @@ export async function unsubscribeHeadersICloud(hub: Hub, accountKey: string, ref
  * attachment, at most FILE_BYTES, read with BODY.PEEK, never kept. Null when the message or the part is not there.
  */
 export async function attachmentICloud(hub: Hub, accountKey: string, ref: MoveRef, part: string): Promise<{ name: string; bytes: Buffer } | null> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
-  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
+  return withClient(loginOf(a), DEADLINES.read, async (c) => {
     const kept = await openKept(c, ref);
     if (!kept) return null;
     const x = attachmentParts(kept.msg.bodyStructure).find((y) => y.part === part);
@@ -818,7 +930,7 @@ export async function attachmentICloud(hub: Hub, accountKey: string, ref: MoveRe
     if (!bytes) throw new StoreError(413, "This attachment is too big to download here (more than 25 MB). Open the mail in Apple Mail for it.");
     return { name: x.name, bytes };
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
@@ -835,10 +947,19 @@ export const FOLDER_NEW_MAX = 50;
 /** One folder of one refresh: what is in it since the time asked, what of that is read, and its new mail. */
 export interface FolderListing { path: string; role: FolderRole; present: string[]; seen: string[]; mails: (InboxMail & { to: MailAddress[] })[]; more: boolean }
 
+/**
+ * The folder Done moves mail to: the one marked `\Archive` (iCloud and most servers), else Gmail's All Mail (`\All`:
+ * moving out of the Inbox there takes the Inbox label off, as Gmail's own Archive does), else a folder named Archive.
+ */
+export function archiveOf(folders: ImapFolder[]): ImapFolder | null {
+  const open = folders.filter((f) => !f.flags.has("\\Noselect") && !f.flags.has("\\NonExistent"));
+  return open.find((f) => f.specialUse === "\\Archive") ?? open.find((f) => f.specialUse === "\\All") ?? open.find((f) => /^(INBOX[./])?archive$/i.test(f.path)) ?? null;
+}
+
 /** The folders the Mail screen shows besides the Inbox: not the Inbox, not Archive (Done shows it), not iCloud's virtual ones. */
 export function shownFolders(folders: ImapFolder[]): { path: string; role: FolderRole }[] {
   return folders
-    .filter((f) => !f.flags.has("\\Noselect") && !f.flags.has("\\NonExistent") && f.path.toUpperCase() !== "INBOX" && !["\\Archive", "\\All", "\\Flagged", "\\Important"].includes(f.specialUse ?? ""))
+    .filter((f) => !f.flags.has("\\Noselect") && !f.flags.has("\\NonExistent") && f.path.toUpperCase() !== "INBOX" && !["\\Archive", "\\All", "\\Flagged", "\\Important"].includes(f.specialUse ?? "") && f.path !== archiveOf(folders)?.path)
     .map((f) => ({ path: f.path, role: ROLES[f.specialUse ?? ""] ?? "own" }))
     .slice(0, FOLDERS_MAX);
 }
@@ -850,11 +971,11 @@ export function shownFolders(folders: ImapFolder[]): { path: string; role: Folde
  * own (fetching them again tells the people they wrote to), and Junk's would tell a spammer the address is read.
  */
 export async function listFoldersICloud(hub: Hub, accountKey: string, since: Date, known: (id: string) => boolean): Promise<FolderListing[]> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
   const out: FolderListing[] = [];
-  await withClient({ user: a.email, pass: a.password }, DEADLINES.list, async (c) => {
+  await withClient(loginOf(a), DEADLINES.list, async (c) => {
     for (const f of shownFolders(await c.list())) {
       const box = await c.mailboxOpen(f.path, { readOnly: true });
       const id = (uid: number) => messageId(box.uidValidity, uid, f.path);
@@ -870,14 +991,14 @@ export async function listFoldersICloud(hub: Hub, accountKey: string, since: Dat
         const { plain, html } = await downloadText(c, String(uid), msg);
         let text: string;
         try { text = readingText(plain, html, "text", "html"); } catch (e) { text = plain.join("\n"); console.error(`[mail-inbox] a mail's text could not be read, so its text part is kept as it is: ${errCode(e)}`); }
-        const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html));
+        const m = inboxMail(id(uid), msg, text, await shownHtml(c, String(uid), msg, html), !isImapKey(accountKey));
         m.remote = [];
         mails.push({ ...m, attachments: attachmentParts(msg.bodyStructure), to: (msg.envelope?.to ?? []).slice(0, 20).map(mailAddress).filter((x) => x.address) });
       }
       out.push({ path: f.path, role: f.role, present: uids.map(id), seen: read.map(id), mails, more: fresh.length > FOLDER_NEW_MAX });
     }
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
   return out;
@@ -897,16 +1018,16 @@ export type MoveDest = { role: "inbox" | "trash" | "junk" } | { path: string };
  * has each message's new id, or null when it was not moved.
  */
 export async function moveToICloud(hub: Hub, accountKey: string, refs: MoveRef[], dest: MoveDest): Promise<Map<string, string | null>> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
   const out = new Map<string, string | null>(refs.map((r) => [r.id, null]));
-  await withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  await withClient(loginOf(a), DEADLINES.read, async (c) => {
     const w = c as unknown as ImapClient & ImapMover;
     if (typeof w.messageMove !== "function" || !w.capabilities?.has("MOVE")) throw new StoreError(502, "iCloud did not offer to move mail (IMAP MOVE), so nothing was moved.");
     const folders = await c.list();
     const inbox = inboxFolder(folders);
-    const archive = folders.find((f) => f.specialUse === "\\Archive" && !f.flags.has("\\Noselect")) ?? null;
+    const archive = archiveOf(folders);
     const shown = shownFolders(folders);
     const to = "path" in dest
       ? shown.find((f) => f.path === dest.path && f.role === "own")?.path
@@ -927,7 +1048,7 @@ export async function moveToICloud(hub: Hub, accountKey: string, refs: MoveRef[]
       }
     }
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
   return out;
@@ -950,17 +1071,17 @@ export async function moveToICloud(hub: Hub, accountKey: string, refs: MoveRef[]
  * The answer has each message's new id (in the destination), or null when it was not moved.
  */
 export async function moveICloud(hub: Hub, accountKey: string, refs: MoveRef[], to: "archive" | "inbox"): Promise<Map<string, string | null>> {
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
   const out = new Map<string, string | null>(refs.map((r) => [r.id, null]));
-  await withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  await withClient(loginOf(a), DEADLINES.read, async (c) => {
     const w = c as unknown as ImapClient & ImapMover;
     if (typeof w.messageMove !== "function" || !w.capabilities?.has("MOVE")) throw new StoreError(502, "iCloud did not offer to move mail (IMAP MOVE), so nothing was moved.");
     const folders = await c.list();
     const inbox = inboxFolder(folders);
-    const archive = folders.find((f) => f.specialUse === "\\Archive" && !f.flags.has("\\Noselect")) ?? null;
-    if (!inbox || !archive) throw new StoreError(409, "This mailbox has no Archive folder in iCloud, so Done cannot move mail there.");
+    const archive = archiveOf(folders);
+    if (!inbox || !archive) throw new StoreError(409, "This mailbox has no Archive folder, so Done cannot move mail there.");
     const [from, dest] = to === "archive" ? [inbox, archive] : [archive, inbox];
     const mine = refs.map((r) => ({ r, ref: parseId(r.id) })).filter((x) => x.ref?.folder === from.path && !!x.r.message_id);
     if (!mine.length) return;
@@ -975,7 +1096,7 @@ export async function moveICloud(hub: Hub, accountKey: string, refs: MoveRef[], 
       out.set(r.id, uid && moved.uidValidity !== undefined ? messageId(moved.uidValidity, uid, dest.path) : `moved:${r.id}`);
     }
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
   return out;
@@ -1004,14 +1125,14 @@ async function setFlagICloud(hub: Hub, accountKey: string, refs: MoveRef[], flag
   const out = refs.map(() => false);
   const todo = refs.map((ref, i) => ({ i, ref, at: parseId(ref.id) })).filter((x) => x.at && x.ref.message_id);
   if (!todo.length) return out;
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
   // One sign-in for all of them (opening a thread of 25 unread mails used to make 25), a folder at a time.
-  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  return withClient(loginOf(a), DEADLINES.read, async (c) => {
     const w = c as unknown as ImapClient & ImapMover;
     const folders = await c.list();
-    const allowed = [inboxFolder(folders)?.path, folders.find((f) => f.specialUse === "\\Archive")?.path].filter(Boolean);
+    const allowed = [inboxFolder(folders)?.path, archiveOf(folders)?.path].filter(Boolean);
     for (const folder of [...new Set(todo.map((x) => x.at!.folder))]) {
       if (!allowed.includes(folder)) continue;
       const box = await w.mailboxOpen(folder, { readOnly: false });
@@ -1024,7 +1145,7 @@ async function setFlagICloud(hub: Hub, accountKey: string, refs: MoveRef[], flag
     }
     return out;
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
@@ -1047,17 +1168,17 @@ export const DRAFT_BYTES = 22_000_000;
  */
 export async function saveDraftICloud(hub: Hub, accountKey: string, raw: Buffer): Promise<void> {
   if (raw.length > DRAFT_BYTES) throw new StoreError(413, "the draft is too big to save");
-  const email = emailOf(accountKey);
-  const a = account(hub, email);
-  if (a.refused_at) throw new StoreError(409, REFUSED);
-  await withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+  const email = accountKey;
+  const a = account(hub, accountKey);
+  if (a.refused_at) throw new StoreError(409, refusedText(a));
+  await withClient(loginOf(a), DEADLINES.read, async (c) => {
     const w = c as unknown as ImapClient & ImapDrafter;
     if (typeof w.append !== "function") throw new StoreError(502, "iCloud did not offer to save a draft, so nothing was saved.");
     const drafts = (await c.list()).find((f) => f.specialUse === "\\Drafts" && !f.flags.has("\\Noselect"));
     if (!drafts) throw new StoreError(409, "This mailbox has no Drafts folder in iCloud, so the draft was not saved.");
     if (!(await w.append(drafts.path, raw, ["\\Draft", "\\Seen"]))) throw new StoreError(502, "iCloud did not take the draft.");
   }).catch((e) => {
-    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: refusedText(a), refused_at: nowIso() });
     throw e;
   });
 }
@@ -1093,4 +1214,11 @@ export const icloudInbox: InboxSource = {
   attachment: (hub, account, ref, part) => attachmentICloud(hub, account, ref, part),
   recipients: (hub, account, ref) => recipientsICloud(hub, account, ref),
   unsubscribeHeaders: (hub, account, ref) => unsubscribeHeadersICloud(hub, account, ref),
+};
+
+/** Other mail accounts as the Mail screen's source (since 2026-11-22): the same IMAP code, their own accounts. */
+export const imapInbox: InboxSource = {
+  ...icloudInbox,
+  prefix: IMAP_PREFIX,
+  accounts: (hub) => (hub.connections.get().imap ?? []).map((a) => `${IMAP_PREFIX}${a.email}`),
 };

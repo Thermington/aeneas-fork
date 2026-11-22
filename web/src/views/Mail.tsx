@@ -470,7 +470,7 @@ export function Mail() {
         )}
         {!chosen.length && (
           <div className="mailx-bar-right">
-            <button type="button" className="mailx-compose-btn" aria-expanded={composing} onClick={() => setComposing((x) => !x)} title="Write a new mail, saved to Drafts in iCloud"><Icon name="pencil" /><span>New mail</span></button>
+            <button type="button" className="mailx-compose-btn" aria-expanded={composing} onClick={() => setComposing((x) => !x)} title="Write a new mail, saved to Drafts in your mailbox"><Icon name="pencil" /><span>New mail</span></button>
           </div>
         )}
       </div>
@@ -511,7 +511,7 @@ export function Mail() {
           )}
           {!list.data && list.error ? <div className="error">{list.error}</div>
             : !list.data ? <div className="muted small">Loading</div>
-            : !list.data.mailboxes.length ? <div className="empty">Link an iCloud mailbox in <a href="#/settings/connections">Settings, Connections</a> to see your mail here.</div>
+            : !list.data.mailboxes.length ? <div className="empty">Link a mailbox in <a href="#/settings/connections">Settings, Connections</a> to see your mail here.</div>
             : editing
               ? <BundleForm key={editing === "new" ? "new" : editing.id} start={editing === "new" ? null : editing} close={() => setEditing(null)}
                   saved={async (id) => { setEditing(null); await list.reload(); if (id) go(`b:${id}` as MailView); else go("inbox"); }} />
@@ -629,10 +629,10 @@ function FolderView({ f, q, stamp, open, setOpen }: { f: MailFolder; q: string; 
   if (err) return <div className="error">{err}</div>;
   if (!mails) return <div className="muted small">Loading</div>;
   const hits = q.trim() ? mails.filter((m) => matches(m, q)) : mails;
-  if (!hits.length) return <Empty title={q.trim() ? "No mail matches" : `Nothing in ${folderLabel(f)}`} text={f.role === "junk" ? "Mail iCloud takes for spam gathers here." : "Mail in this folder in iCloud shows here."} />;
+  if (!hits.length) return <Empty title={q.trim() ? "No mail matches" : `Nothing in ${folderLabel(f)}`} text={f.role === "junk" ? "Mail your provider takes for spam gathers here." : "Mail in this folder shows here."} />;
   return (
     <div className="mailx-col">
-      {f.role === "junk" && <div className="muted small mailx-folder-note">iCloud put this mail in Spam. Its pictures are never loaded, and its links may not be safe.</div>}
+      {f.role === "junk" && <div className="muted small mailx-folder-note">Your mail provider put this mail in Spam. Its pictures are never loaded, and its links may not be safe.</div>}
       {f.role === "drafts" && <div className="muted small mailx-folder-note">Send or change a draft in Apple Mail.</div>}
       <div className="mailx-list">
         {hits.slice(0, shown).map((m) => open === m.id
@@ -733,7 +733,7 @@ function Mailboxes({ data, showKeys }: { data: MailList; showKeys: () => void })
               {m.last_error && <div className="error">{m.last_error}</div>}
             </div>
           ))}
-          <div className="muted">Opening a mail marks it read in iCloud too, and Pin flags it there (a flag in Apple Mail pins it here); Done moves it to Archive there, and Undo moves it back.</div>
+          <div className="muted">Opening a mail marks it read in your mailbox too, and Pin flags it there (a flag in your mail app pins it here); Done moves it to Archive there, and Undo moves it back.</div>
           <NotifySettings />
           <TriageSwitch on={data.triage !== false} />
           <FoldNotesList />
@@ -1173,7 +1173,7 @@ function DoneButton({ m, labelled = false }: { m: MailThread; labelled?: boolean
   const back = m.state === "done";
   const label = back ? "Move to Inbox" : "Done";
   return (
-    <button type="button" className="mailx-act act-done" title={back ? "Move back to the Inbox in iCloud" : "Done: moves it to Archive in iCloud"} aria-label={label} disabled={busy}
+    <button type="button" className="mailx-act act-done" title={back ? "Move back to the Inbox in your mailbox" : "Done: moves it to Archive in your mailbox"} aria-label={label} disabled={busy}
       onClick={async () => { setBusy(true); await move(back ? m.ids.done : m.ids.open, back ? "inbox" : "done"); setBusy(false); }}>
       <Icon name={back ? "inbox" : "check"} />{labelled && <span>{label}</span>}
     </button>
@@ -1282,8 +1282,8 @@ function MoveButtons({ ids, back, spam = false }: { ids: string[]; back: MoveTar
   const own = folders.filter((f) => f.role === "own");
   return (
     <>
-      <button type="button" className="mailx-act" disabled={busy} title="Delete: moves it to Trash in iCloud" onClick={() => void go("trash", "Moved to Trash")}><Icon name="trash" /><span>Delete</span></button>
-      {spam && <button type="button" className="mailx-act" disabled={busy} title="Spam: moves it to Spam (Junk) in iCloud" onClick={() => void go("junk", "Moved to Spam")}><Icon name="spam" /><span>Spam</span></button>}
+      <button type="button" className="mailx-act" disabled={busy} title="Delete: moves it to Trash in your mailbox" onClick={() => void go("trash", "Moved to Trash")}><Icon name="trash" /><span>Delete</span></button>
+      {spam && <button type="button" className="mailx-act" disabled={busy} title="Spam: moves it to Spam (Junk) in your mailbox" onClick={() => void go("junk", "Moved to Spam")}><Icon name="spam" /><span>Spam</span></button>}
       {!!own.length && <MoveMenu folders={own} disabled={busy} pick={(f) => void go(f.key, `Moved to ${folderLabel(f)}`)} />}
     </>
   );
@@ -1310,7 +1310,7 @@ function FolderActions({ m, f }: { m: FolderMail; f: MailFolder }) {
   const here: MoveTarget = f.role === "own" ? f.key : f.role;
   const others = folders.filter((x) => x.role === "own" && x.key !== f.key);
   const toInbox = <button type="button" className="mailx-act" disabled={busy} onClick={() => void go("inbox", "Moved to Inbox", here)}><Icon name="inbox" /><span>{f.role === "junk" ? "Not spam" : "Move to Inbox"}</span></button>;
-  const del = <button type="button" className="mailx-act" disabled={busy} title="Delete: moves it to Trash in iCloud" onClick={() => void go("trash", "Moved to Trash", f.role === "sent" || f.role === "drafts" ? null : here)}><Icon name="trash" /><span>Delete</span></button>;
+  const del = <button type="button" className="mailx-act" disabled={busy} title="Delete: moves it to Trash in your mailbox" onClick={() => void go("trash", "Moved to Trash", f.role === "sent" || f.role === "drafts" ? null : here)}><Icon name="trash" /><span>Delete</span></button>;
   return (
     <>
       {(f.role === "junk" || f.role === "trash" || f.role === "own") && toInbox}
@@ -1460,7 +1460,7 @@ function Composer({ reply, all = false, forward, draft, close }: { reply?: MailS
   if (saved) {
     return (
       <div className="mailx-compose mailx-card-pad" role="status">
-        <span>Saved to Drafts in iCloud. Open Drafts in Apple Mail to send it.</span>
+        <span>Saved to Drafts in your mailbox. Open Drafts in your mail app to send it.</span>
         <button type="button" className="small" onClick={close}>Close</button>
       </div>
     );
@@ -1474,7 +1474,7 @@ function Composer({ reply, all = false, forward, draft, close }: { reply?: MailS
           <dt>To</dt><dd>{preview.to.join(", ")}</dd>
           {!!preview.cc?.length && <><dt>Cc</dt><dd>{preview.cc.join(", ")}</dd></>}
           {!!preview.files?.length && <><dt>Files</dt><dd>{preview.files.map((f) => `${f.name} (${fileSize(f.size)})`).join(", ")}</dd></>}
-          {forward && withTheirs && <><dt>Also</dt><dd>The mail's own attachments, added from iCloud when it is saved</dd></>}
+          {forward && withTheirs && <><dt>Also</dt><dd>The mail's own attachments, added from your mailbox when it is saved</dd></>}
           <dt>Subject</dt><dd>{preview.subject || "(no subject)"}</dd>
         </dl>
         <div className="mailx-compose-text">{preview.text}</div>
@@ -1521,7 +1521,7 @@ function Composer({ reply, all = false, forward, draft, close }: { reply?: MailS
         <button type="submit" className="primary" disabled={busy || (!forward && !text.trim()) || (!reply && !to.trim())}>{busy ? "Checking" : "Preview"}</button>
         <button type="button" className="link" onClick={close}>Discard</button>
         <label className="mailx-attach" title="Attach files (at most 10, 15 MB in all)"><Icon name="clip" /><span>Attach</span><input type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} /></label>
-        <span className="muted small">Saved to Drafts in iCloud, to send from Apple Mail.</span>
+        <span className="muted small">Saved to Drafts in your mailbox, to send from your mail app.</span>
         {err && <span className="error small" role="alert">{err}</span>}
       </div>
     </form>
