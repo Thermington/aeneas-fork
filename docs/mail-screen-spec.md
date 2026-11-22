@@ -70,9 +70,10 @@ Reload the list after every action, and when the screen comes back to the front.
   narrower than what they hold, and the search box shrinks to keep them so. Up to 420px, Pinned only is a round pin
   button and New mail a round pencil (white circles, below).
 - **The bar's buttons (next PR)** look like the Pinned only switch's circle: Refresh (and the phone's magnifier) a white
-  circle, New mail a white pill, with their icon and words in the bar's color; no ring, and no change when pointed at.
-  On a phone (up to 420px) New mail and Pinned only are white circles too, all four 36px: the pin gray while off,
-  filled in the bar's color while on.
+  circle, New mail a white pill, with their icon and words in the bar's color. Pointed at, as Sweep: solid in the bar's
+  color deepened, the icon and words white, with a thin white ring; Pinned only's circle does the same. The pin is in
+  the bar's color, an outline while off and filled while on. On a phone (up to 420px) New mail and Pinned only are
+  white circles too, all four 36px.
 
 ---
 

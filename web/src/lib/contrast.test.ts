@@ -106,6 +106,9 @@ describe("design token contrast", () => {
       // under the bar's color reads as the bar's white words do.
       const white = css.slice(css.indexOf(".mailx-bar .mailx-refresh, .mailx-bar .mailx-compose-btn, .mailx-bar .mailx-search-btn {"));
       expect(white.slice(0, white.indexOf("}"))).toMatch(/background: #fff;[^}]*color: var\(--barc\);/);
+      // Pointed at, they turn the bar's color deepened (never lightened), with white on it: white reads there as on the bar.
+      const hover = white.slice(white.indexOf("}") + 1);
+      expect(hover.slice(0, hover.indexOf("}"))).toMatch(/background: color-mix\(in srgb, var\(--barc\) \d+%, #000\); color: #fff;/);
       for (const id of MAIL) {
         const field = over(box.color, box.part, t[`b-${id}`]);
         expect(contrast("#ffffff", field), `typed words on ${id}`).toBeGreaterThanOrEqual(4.5);

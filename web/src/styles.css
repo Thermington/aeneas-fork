@@ -1024,9 +1024,14 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 /*
  * Refresh, New mail and (on phones) Search as the Pinned only switch's circle (2026-11-22): a white circle, or for New
  * mail a white pill, its icon and words in the bar's color (which carries white at 4.5:1, so it reads on white as
- * well). No ring and no change when pointed at.
+ * well). Pointed at, as Sweep: solid, the bar's color deepened, with the icon and words white, and a thin white ring
+ * keeping its shape on the bar. The switch's circle does the same.
  */
 .mailx-bar .mailx-refresh, .mailx-bar .mailx-compose-btn, .mailx-bar .mailx-search-btn { background: #fff; border: 0; color: var(--barc); }
+.mailx-bar .mailx-refresh:hover:not(:disabled), .mailx-bar .mailx-compose-btn:hover, .mailx-bar .mailx-compose-btn[aria-expanded="true"], .mailx-bar .mailx-search-btn:hover,
+.mailx-bar .mailx-switch:hover .knob {
+  background: color-mix(in srgb, var(--barc) 80%, #000); color: #fff; box-shadow: inset 0 0 0 2px #fff;
+}
 .mailx-bar .mailx-refresh:disabled { opacity: 1; }
 .mailx-menu { display: none; }
 /*
@@ -1039,9 +1044,9 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-switch { display: flex; align-items: center; gap: 8px; white-space: nowrap; flex: none; }
 .mailx-switch.placeholder { visibility: hidden; pointer-events: none; }
 .mailx-bar { grid-template-columns: minmax(max-content, 1fr) minmax(0, min(680px, calc(100% - 260px))) minmax(max-content, 1fr); }
-/* Pinned only: the switch's circle carries the pin, gray while off, in the bar's color while on. */
+/* Pinned only: the switch's circle carries the pin in the bar's color, an outline while off, filled while on. */
 .mailx-switch .sw { width: 58px; height: 32px; border-radius: 16px; background: rgb(255 255 255 / .35); position: relative; }
-.mailx-switch .knob { position: absolute; top: 2px; left: 2px; width: 28px; height: 28px; border-radius: 50%; background: #fff; color: #6b7280; display: grid; place-items: center; transition: transform .2s; }
+.mailx-switch .knob { position: absolute; top: 2px; left: 2px; width: 28px; height: 28px; border-radius: 50%; background: #fff; color: var(--barc); display: grid; place-items: center; transition: transform .2s; }
 .mailx-switch .knob .mailx-icon { width: 18px; height: 18px; stroke-width: 2; }
 .mailx-switch[aria-pressed="true"] .sw { background: rgb(255 255 255 / .8); }
 .mailx-switch[aria-pressed="true"] .knob { transform: translateX(26px); color: var(--barc); }
@@ -1742,17 +1747,20 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-movemenu { width: auto; min-height: 32px; padding: 4px 8px; font-size: 13px; }
 /*
  * The narrowest phones (up to 420px): the bar's gaps and title smaller, and Pinned only a round pin button (a white
- * circle, the pin gray while off and filled in the bar's color while on), so the whole bar fits in about 275px.
+ * circle, the pin in the bar's color, an outline while off and filled while on), so the whole bar fits in about 275px.
  */
 @media (max-width: 420px) {
   .mailx-bar { gap: 6px; padding: 10px 8px; }
   .mailx-bar-left { gap: 6px; }
   .mailx-bar-mid { gap: 4px; }
   .mailx-bar h1 { font-size: 16px; }
-  /* A white circle like Refresh, Search and New mail beside it: the pin gray while off, filled in the bar's color while on. */
+  /* A white circle like Refresh, Search and New mail beside it: the pin in the bar's color, an outline while off, filled while on. */
   .mailx-switch .sw, .mailx-switch[aria-pressed="true"] .sw { width: 36px; height: 36px; border-radius: 50%; background: #fff; }
-  .mailx-switch .knob { top: 4px; left: 4px; background: transparent; color: #6b7280; }
+  .mailx-switch .knob { top: 4px; left: 4px; width: 28px; height: 28px; background: transparent; color: var(--barc); }
   .mailx-switch[aria-pressed="true"] .knob { transform: none; background: transparent; color: var(--barc); }
+  /* Pointed at, the whole circle turns, as Refresh beside it does. */
+  .mailx-switch:hover .sw { background: color-mix(in srgb, var(--barc) 80%, #000); box-shadow: inset 0 0 0 2px #fff; }
+  .mailx-bar .mailx-switch:hover .knob { background: transparent; box-shadow: none; color: #fff; }
 }
 /* Attachments: a paperclip on rows; on an open mail, its pictures' previews and a list of its files with Download. */
 .clipmark { color: var(--muted); display: flex; }
