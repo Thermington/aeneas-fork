@@ -74,6 +74,10 @@ Reload the list after every action, and when the screen comes back to the front.
   color deepened, the icon and words white, with a thin white ring; Pinned only's circle does the same. The pin is in
   the bar's color, an outline while off and filled while on. On a phone (up to 420px) New mail and Pinned only are
   white circles too, all four 36px.
+- **Everything clickable shows it when pointed at (next PR):** on the bar, deeper and never lighter (the search box's
+  shade darkens, the menu and ✕ get one); on the page, the screen's hover shade and a darker border (an open mail's
+  header, More, smart replies, Move to, Attach files, picture previews, the bundle colors), or the solid color for Pin,
+  Snooze, Done and Sweep. A new control gets one too.
 
 ---
 

@@ -1041,6 +1041,18 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-search { flex: 1; min-width: 0; background: rgb(0 0 0 / .2); border: 0; color: #fff; height: 36px; min-height: 0; padding: 0 12px; color-scheme: dark; }
 .mailx-search::placeholder { color: rgb(255 255 255 / .8); }
 .mailx-search:focus { outline: 2px solid #fff; outline-offset: 1px; }
+/*
+ * Everything that can be clicked shows it when pointed at (2026-11-22). On the colored bar: deeper, never lighter, so
+ * the white on it still reads. On the page: the screen's own hover shade, or the colors' solid fill.
+ */
+.mailx-search:hover:not(:focus) { background: rgb(0 0 0 / .32); }
+.mailx-bar .mailx-menu:hover, .mailx-bar .mailx-search-close:hover { background: rgb(0 0 0 / .2); }
+.mailx-bar .mailx-menu { border-radius: 50%; }
+.mailx-card-head:hover { background: var(--mail-hover); }
+.mailx-more:hover, .mailx-smart-one:hover, .mailx-movemenu:hover:not(:disabled), .mailx-attach:hover { background: var(--mail-hover); border-color: var(--muted); }
+.mailx-att-pic:hover { border-color: var(--muted); filter: brightness(1.05); }
+.mailx-swatch:hover:not(.on) { border-color: var(--muted); }
+.mailx-check:hover, .mailx-snooze-own label:hover { color: var(--text); }
 .mailx-switch { display: flex; align-items: center; gap: 8px; white-space: nowrap; flex: none; }
 .mailx-switch.placeholder { visibility: hidden; pointer-events: none; }
 .mailx-bar { grid-template-columns: minmax(max-content, 1fr) minmax(0, min(680px, calc(100% - 260px))) minmax(max-content, 1fr); }

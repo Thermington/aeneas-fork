@@ -100,6 +100,10 @@ describe("design token contrast", () => {
       const placeholder = veil(".mailx-search::placeholder {");
       expect(box.color).toBe("#000000");
       expect(placeholder.color).toBe("#ffffff");
+      // Pointed at, the search box goes deeper, never lighter: its words and placeholder read as well or better.
+      const hovered = veil(".mailx-search:hover:not(:focus) {");
+      expect(hovered.color).toBe("#000000");
+      expect(hovered.part).toBeGreaterThanOrEqual(box.part);
       // The selection's buttons when pointed at: the bar darkened, as the search box, so their white words read too.
       for (const rule of [".mailx-selbar button:hover {"]) expect(veil(rule).color, rule).toBe("#000000");
       // Refresh, New mail and Search are white with the bar's color on them, as the Pinned only switch's circle: white
