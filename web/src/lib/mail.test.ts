@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, needsYou, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, foldedLines, needsYou, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -453,5 +453,13 @@ describe("mail triage digest", () => {
     ];
     expect(needsYou(list).map((x) => x.id)).toEqual(["today", "reply-new", "reply-old"]);
     expect(needsYou(Array.from({ length: 9 }, (_, i) => m(`t${i}`, `2026-11-2${i % 9}T10:00:00Z`, { urgency: "today", needs_reply: false })))).toHaveLength(5);
+  });
+});
+
+describe("mail folding notes", () => {
+  it("offers the first lines the fold hides", () => {
+    const text = "Sounds good.\n\nOn Monday Alex wrote:\n\n  The pipe must go.  \n> a\n> b\n> c\n> d\n> e\n> f\n> g";
+    expect(foldedLines(text, text.indexOf("On Monday"))).toEqual(["On Monday Alex wrote:", "The pipe must go.", "> a", "> b", "> c", "> d", "> e", "> f"]);
+    expect(foldedLines(text, undefined)).toEqual([]);
   });
 });

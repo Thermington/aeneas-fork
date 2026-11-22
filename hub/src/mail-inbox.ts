@@ -14,7 +14,7 @@ export const sourceOf = (account: string) => INBOX_SOURCES.find((s) => account.s
 import { mailboxLabel } from "./mail-filer.js";
 import { errCode } from "./logsafe.js";
 import { mailDocument, pictureData, withImages } from "./mail-html.js";
-import { ownWords, quoteStart } from "./imports/mail-text.js";
+import { ownWords, quoteStart, withoutSignature } from "./imports/mail-text.js";
 import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MODULES, type BundleContext } from "./mail-bundles.js";
 import { fetchBytesViaTor, fetchPublicBytes, postOneClick, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
@@ -134,6 +134,8 @@ export function openMailDb(dbPath: string): DB {
   // Triage (since 2026-11-21): the model's urgency, summary and needs-reply, kept TRIAGE_DAYS from triaged_at.
   if (!inboxCols.includes("triage")) db.exec("ALTER TABLE inbox ADD COLUMN triage TEXT");
   if (!inboxCols.includes("triaged_at")) db.exec("ALTER TABLE inbox ADD COLUMN triaged_at TEXT");
+  // A folding note (since 2026-11-22): the owner said the fold hid something; kept with the mail, never sent anywhere.
+  if (!inboxCols.includes("fold_note")) db.exec("ALTER TABLE inbox ADD COLUMN fold_note TEXT");
   if (!(db.prepare("PRAGMA table_info(folder_mail)").all() as { name: string }[]).some((c) => c.name === "attachments")) db.exec("ALTER TABLE folder_mail ADD COLUMN attachments TEXT");
   return db;
 }
@@ -366,9 +368,11 @@ export interface MailMessage extends MailSummary {
   text: string; html: string | null; pictures_pending: boolean; pictures_ask: boolean;
   /** Where the quoted history starts in `text` (quoteStart), which clients fold; absent when it has none. */
   quote_at?: number;
+  /** The owner said not to fold this mail (a folding note): clients show its page unfolded too. */
+  no_fold?: boolean;
 }
 
-type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number; cards?: string | null; attachments?: string | null; triage?: string | null };
+type Row = { key: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; automated: number; bundle: string | null; state: MailState; pinned: number; snooze_until: string | null; logo_domain?: string | null; back_at?: string | null; seen?: number; thread?: string | null; mine?: number; cards?: string | null; attachments?: string | null; triage?: string | null; fold_note?: string | null };
 
 /**
  * A message's cards: those stored at refresh (from the sender's data, or its text); for mail kept before cards (NULL),
@@ -387,7 +391,7 @@ function cardsOf(r: Row): MailCard[] {
  * `(http://(http://…` cannot make it take long.
  */
 const PREVIEW_READ = 4000;
-export const previewOf = (text: string) => ownWords(text.slice(0, PREVIEW_READ))
+export const previewOf = (text: string) => withoutSignature(ownWords(text.slice(0, PREVIEW_READ)))
   .replace(/\[([^\]\n]{0,300})\]\(\s*(https?:|mailto:)[^)\s]*\s*\)/gi, "$1")
   .replace(/\s*[(<]\s*(https?:\/\/|mailto:)[^)>\s]*\s*[)>]/gi, "")
   .replace(/(https?:\/\/|www\.)[^\s)]+/gi, "")
@@ -396,6 +400,11 @@ export const previewOf = (text: string) => ownWords(text.slice(0, PREVIEW_READ))
 /** A kept triage, or null (none, or one the hub cannot read). */
 const triageOf = (s: string | null | undefined): Triage | null => { try { return s ? readTriage(s) : null; } catch { return null; } };
 
+/** A kept folding note: the line the fold started at, the lines the owner said matter, and whether not to fold the mail. */
+export interface FoldNote { cut: string; lines: string[]; no_fold: boolean; at: string }
+const foldNoteOf = (s: string | null | undefined): FoldNote | null => { try { return s ? (JSON.parse(s) as FoldNote) : null; } catch { return null; } };
+const noFold = (s: string | null | undefined) => !!foldNoteOf(s)?.no_fold;
+
 /** How many attachments a kept list holds (0 when none or not known). */
 const attachmentCount = (s: string | null | undefined): number => { try { return s ? (JSON.parse(s) as unknown[]).length : 0; } catch { return 0; } };
 
@@ -403,7 +412,7 @@ function summary(r: Row): MailSummary {
   const s: MailSummary = {
     id: r.key, at: r.at, from: { name: r.from_name, address: r.from_address },
     ...(r.reply_to ? { reply_to: r.reply_to } : {}),
-    subject: r.subject, preview: previewOf(r.text), automated: !!r.automated, bundle: r.bundle, state: r.state, pinned: !!r.pinned,
+    subject: r.subject, preview: noFold(r.fold_note) ? withoutSignature(r.text.slice(0, PREVIEW_READ)).replace(/\s+/g, " ").trim().slice(0, 200) : previewOf(r.text), automated: !!r.automated, bundle: r.bundle, state: r.state, pinned: !!r.pinned,
     ...(r.snooze_until ? { snooze_until: r.snooze_until } : {}),
     ...(r.logo_domain ? { logo_domain: r.logo_domain } : {}),
     ...(r.back_at ? { back_at: r.back_at } : {}),
@@ -425,7 +434,7 @@ export const LIST_MAX = 5000;
  * the screen sorts it into Inbox, Snoozed, Done and the bundles.
  */
 export function listMail(db: DB, ctx: BundleContext = NO_MODULES): MailSummary[] {
-  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments, triage FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
+  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments, triage, fold_note FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
   return rows.map((r) => ({
     ...summary(r),
     bundle: bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx),
@@ -1086,6 +1095,44 @@ export function triageNew(hub: Hub, now = new Date()): Promise<number> {
   return run;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// "Something important missing?" (since 2026-11-22): folding notes, kept with the mail, never sent anywhere
+
+/** At most this many lines in a note, each at most this long. */
+export const NOTE_LINES = 8;
+const NOTE_LINE_MAX = 300;
+
+/**
+ * The owner says the fold hid something in a kept mail: `lines` (each a whole line of the mail's folded part, checked
+ * here, at most NOTE_LINES) and `no_fold` (show this mail unfolded, its preview too). The note keeps the line the fold
+ * started at, for turning into a made-up test; it lives in the mail's own row, so it goes when the mail goes.
+ */
+export function saveFoldNote(db: DB, key: string, body: Record<string, unknown>): FoldNote {
+  const r = db.prepare("SELECT text FROM inbox WHERE key = ?").get(key) as { text: string } | undefined;
+  if (!r) throw new StoreError(404, "that message is not kept (it left the Inbox)");
+  const at = quoteStart(r.text);
+  const folded = at >= 0 ? r.text.slice(at).split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  const lines = body.lines === undefined ? [] : body.lines;
+  if (!Array.isArray(lines) || lines.length > NOTE_LINES || !lines.every((l) => typeof l === "string" && l.length <= NOTE_LINE_MAX && folded.includes(l.trim()))) {
+    throw new StoreError(422, `lines are at most ${NOTE_LINES} lines of the mail's folded part`);
+  }
+  if (body.no_fold !== undefined && typeof body.no_fold !== "boolean") throw new StoreError(422, "no_fold is true or false");
+  const note: FoldNote = { cut: (folded[0] ?? "").slice(0, NOTE_LINE_MAX), lines: (lines as string[]).map((l) => l.trim()), no_fold: body.no_fold === true, at: new Date().toISOString() };
+  db.prepare("UPDATE inbox SET fold_note = ? WHERE key = ?").run(JSON.stringify(note), key);
+  return note;
+}
+
+/** Every kept folding note, newest first: the mail it is on (id, subject, sender) and the note. */
+export function foldNotes(db: DB): { id: string; subject: string; from: string; note: FoldNote }[] {
+  const rows = db.prepare("SELECT key, subject, from_address, fold_note FROM inbox WHERE fold_note IS NOT NULL").all() as { key: string; subject: string; from_address: string; fold_note: string }[];
+  return rows.map((r) => ({ id: r.key, subject: r.subject, from: r.from_address, note: foldNoteOf(r.fold_note)! })).filter((x) => x.note).sort((a, b) => b.note.at.localeCompare(a.note.at));
+}
+
+/** Clear the notes: `all`, or one mail's; with `keep_unfolded`, a mail the owner said not to fold stays unfolded. */
+export function clearFoldNotes(db: DB, key?: string): number {
+  return (key ? db.prepare("UPDATE inbox SET fold_note = NULL WHERE key = ?").run(key) : db.prepare("UPDATE inbox SET fold_note = NULL WHERE fold_note IS NOT NULL").run()).changes;
+}
+
 /**
  * Pins made before pins were kept as flags (2026-11-21): flagged in the mailbox once, before the first refresh that reads
  * the flags, so that refresh does not take them away. Marked done per mailbox in `settings` (`pins_flagged:<account>`).
@@ -1263,10 +1310,11 @@ export function mailLogos(db: DB): Record<string, string> {
  * Tor), so pictures not there yet are on their way; otherwise they wait for the person to ask.
  */
 export function mailMessage(db: DB, key: string, byTor = true): MailMessage | null {
-  const r = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, html, remote, seen, mine, cards FROM inbox WHERE key = ?").get(key) as (Row & { html: string | null; remote: string | null }) | undefined;
+  const r = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, text, automated, bundle, state, pinned, snooze_until, html, remote, seen, mine, cards, fold_note FROM inbox WHERE key = ?").get(key) as (Row & { html: string | null; remote: string | null }) | undefined;
   if (!r) return folderMessage(db, key);
-  const quote = quoteStart(r.text);
-  return { ...summary(r), text: r.text, html: r.html ? mailDocument(withImages(r.html, [])) : null, pictures_pending: !!r.remote && byTor, pictures_ask: !!r.remote && !byTor, ...(quote >= 0 ? { quote_at: quote } : {}) };
+  // The owner said not to fold this mail: no quote_at, and clients leave its page unfolded (no_fold).
+  const quote = noFold(r.fold_note) ? -1 : quoteStart(r.text);
+  return { ...summary(r), text: r.text, html: r.html ? mailDocument(withImages(r.html, [])) : null, pictures_pending: !!r.remote && byTor, pictures_ask: !!r.remote && !byTor, ...(quote >= 0 ? { quote_at: quote } : {}), ...(noFold(r.fold_note) ? { no_fold: true } : {}) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

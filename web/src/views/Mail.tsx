@@ -23,6 +23,8 @@ import {
   cardLink,
   type MailCard,
   type SearchHit,
+  type FoldNote,
+  foldedLines,
   needsYou,
   type UnsubscribeOptions,
   httpsLink,
@@ -708,6 +710,7 @@ function Mailboxes({ data, showKeys }: { data: MailList; showKeys: () => void })
           <div className="muted">Opening a mail marks it read in iCloud too, and Pin flags it there (a flag in Apple Mail pins it here); Done moves it to Archive there, and Undo moves it back.</div>
           <NotifySettings />
           <TriageSwitch on={data.triage !== false} />
+          <FoldNotesList />
           <BlockedList blocked={data.blocked ?? []} />
         </div>
       )}
@@ -1647,6 +1650,60 @@ function Attachments({ m }: { m: MailSummary }) {
   );
 }
 
+/**
+ * "Something important missing?": the first lines the fold hides, to mark the ones that matter, and Don't fold this
+ * mail. Saved as a note on the mail on the hub (with it, and never sent anywhere), to improve how mail is folded.
+ */
+function FoldNotePanel({ m, lines, done }: { m: MailSummary; lines: string[]; done: (unfold: boolean) => void }) {
+  const { act } = useContext(Look);
+  const [marked, setMarked] = useState<string[]>([]);
+  const [unfold, setUnfold] = useState(true);
+  const [err, setErr] = useState("");
+  const save = async () => {
+    try {
+      await engine.client!.mailFolding(m.id, { lines: marked, no_fold: unfold });
+      await act(async () => undefined);
+      done(unfold);
+    } catch (e) { setErr(plainError(e)); }
+  };
+  return (
+    <div className="mailx-compose mailx-card-pad" role="group" aria-label="Something important missing?">
+      <b>Something important folded away?</b>
+      {!!lines.length && <span className="muted small">Mark the lines that matter. They stay on your hub as a note for improving how mail is folded.</span>}
+      {lines.map((l) => (
+        <label key={l} className="mailx-check small"><input type="checkbox" checked={marked.includes(l)} onChange={(e) => setMarked(e.target.checked ? [...marked, l] : marked.filter((x) => x !== l))} /> {l}</label>
+      ))}
+      <label className="mailx-check small"><input type="checkbox" checked={unfold} onChange={(e) => setUnfold(e.target.checked)} /> Don't fold this mail</label>
+      <div className="mailx-compose-acts">
+        <button type="button" className="primary" disabled={!marked.length && !unfold} onClick={() => void save()}>Save</button>
+        <button type="button" className="link" onClick={() => done(false)}>Cancel</button>
+        {err && <span className="error small">{err}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** The folding notes the owner made, to look over (and turn into made-up test mail), with Clear. */
+function FoldNotesList() {
+  const [notes, setNotes] = useState<{ id: string; subject: string; from: string; note: FoldNote }[] | null>(null);
+  useEffect(() => { engine.client?.mailFoldNotes().then((r) => setNotes(r.notes)).catch(() => setNotes([])); }, []);
+  if (!notes?.length) return null;
+  return (
+    <div className="mailx-blocked">
+      <b>Folding notes ({notes.length})</b>
+      <span className="muted">Where folding hid something you marked. Kept with each mail on your hub, never sent anywhere.</span>
+      {notes.map((n) => (
+        <div key={n.id}>
+          <div>{n.subject || "(no subject)"} <span className="muted">· {n.from}{n.note.no_fold ? " · not folded" : ""}</span></div>
+          <div className="muted">Folded at: {n.note.cut || "(the page's own fold)"}</div>
+          {n.note.lines.map((l) => <div key={l}>✓ {l}</div>)}
+        </div>
+      ))}
+      <button type="button" className="link small" onClick={() => void engine.client?.mailClearFoldNotes().then(() => setNotes([]))}>Clear the notes</button>
+    </div>
+  );
+}
+
 /** One message's body: the mail as sent (the hub's cleaned page), or its text; fetched from the hub when it shows. */
 /** A message, with Reply, Reply all and Forward under it (`write`): the writing box opens right below it. */
 function Message({ m, write = false }: { m: MailSummary; write?: boolean }) {
@@ -1669,13 +1726,14 @@ function MessageBody({ m }: { m: MailSummary }) {
   const [asText, setAsText] = useState(false);
   // The quoted history under a reply: folded until "•••" is pressed (its page marks it, or its text's quote line).
   const [showQuote, setShowQuote] = useState(false);
+  const [noting, setNoting] = useState(false);
   const [pageQuote, setPageQuote] = useState(false);
   const asPage = !!full?.html && !asText;
   const hasQuote = asPage ? pageQuote : full?.quote_at !== undefined;
   const text = full && !asPage && full.quote_at !== undefined && !showQuote ? full.text.slice(0, full.quote_at).trimEnd() : full?.text ?? "";
   useEffect(() => {
     let live = true;
-    engine.client?.mailMessage(m.id).then((x) => { if (live) setFull(x); }).catch((e) => { if (live) setErr(plainError(e)); });
+    engine.client?.mailMessage(m.id).then((x) => { if (live) { setFull(x); if (x.no_fold) setShowQuote(true); } }).catch((e) => { if (live) setErr(plainError(e)); });
     return () => { live = false; };
   }, [m.id]);
   // Show pictures (a hub without Tor): the hub fetches this mail's pictures from its sender now, and the mail comes
@@ -1710,8 +1768,10 @@ function MessageBody({ m }: { m: MailSummary }) {
       {full && hasQuote && (
         <div className="mailx-card-pad">
           <button type="button" className="mailx-fold" aria-expanded={showQuote} title={showQuote ? "Hide the quoted text" : "Show the quoted text"} onClick={() => setShowQuote(!showQuote)}>•••</button>
+          {m.state !== "folder" && <button type="button" className="link small mailx-foldnote-btn" aria-expanded={noting} onClick={() => setNoting((x) => !x)}>Folded too much?</button>}
         </div>
       )}
+      {full && noting && <FoldNotePanel m={m} lines={foldedLines(full.text, full.quote_at)} done={(unfold) => { setNoting(false); if (unfold) { setShowQuote(true); setFull({ ...full, quote_at: undefined, no_fold: true }); } }} />}
       {full && (
         <div className="mailx-card-foot mailx-card-pad muted small">
           {full.html ? (

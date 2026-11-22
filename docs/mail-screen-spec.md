@@ -171,6 +171,9 @@ This part matters most. Mail is hostile input.
 - **Quoted history:** folded behind "•••" when the page has something besides it. The page marks it with
   `QUOTE_SELECTOR` while its body has the class `aeneas-fold`; the client removes that class to unfold. A mail that is
   all quote (a forward) is never folded.
+- **Folded too much? (next PR):** beside "•••", a panel listing the first 8 lines the fold hides (`foldedLines`) to
+  mark, and Don't fold this mail (on by default); saved with `POST /mail/messages/:id/folding`. A mail with `no_fold`
+  opens unfolded, its page too. The info panel lists the notes (`GET /mail/folding-notes`) with Clear the notes.
 - **Pictures:** `pictures_pending` means the hub is still fetching them (say so). `pictures_ask` means the hub has no
   Tor, so show **Show pictures** with the reason ("your hub would fetch them from the sender, who then sees your home's
   internet address"); it calls the pictures route and shows the mail it returns.

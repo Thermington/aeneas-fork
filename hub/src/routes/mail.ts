@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { blockedSenders, blockSender, setTriage, triageOn, bundleDelivery, folderMail, searchMail, unblockSender, unsubscribe, unsubscribeOptions, mailAttachment, mailAttachments, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
+import { blockedSenders, blockSender, clearFoldNotes, foldNotes, saveFoldNote, setTriage, triageOn, bundleDelivery, folderMail, searchMail, unblockSender, unsubscribe, unsubscribeOptions, mailAttachment, mailAttachments, moveMail, listMail, mailFolders, mailboxStates, mailLogos, mailMessage, mailNotify, markDone, MOVE_MAX, refreshMail, saveMailDraft, suggestGreeting, saveBundleDelivery, saveMailNotify, saveSnoozeTimes, setPinned, setPinnedSynced, setSeen, showPictures, SNOOZE_MAX_DAYS, snoozeMail, snoozeTimes, undoDone, unsnoozeMail, wakeSnoozed, SEEN_MAX, setSeenMany } from "../mail-inbox.js";
 import { readJsonObject } from "../http.js";
 import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, updateCustomBundle } from "../mail-bundles.js";
 
@@ -125,6 +125,10 @@ export function mailRoutes() {
     const body = await readJsonObject(c);
     return c.json(await unsubscribe(c.get("hub"), c.req.param("id"), body.how, body.direct === true));
   });
+  // "Something important missing?": a folding note on a mail, the notes, and clearing them. Kept on the hub only.
+  r.post("/mail/messages/:id/folding", async (c) => c.json(saveFoldNote(c.get("hub").mailDb, c.req.param("id"), await readJsonObject(c))));
+  r.get("/mail/folding-notes", (c) => c.json({ notes: foldNotes(c.get("hub").mailDb) }));
+  r.delete("/mail/folding-notes", (c) => c.json({ cleared: clearFoldNotes(c.get("hub").mailDb) }));
   // Triage on or off (off erases every kept triage).
   r.put("/mail/settings/triage", async (c) => {
     const body = await readJsonObject(c);

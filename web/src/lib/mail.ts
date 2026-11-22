@@ -253,6 +253,8 @@ export interface MailButton { text: string; url: string }
  */
 export interface MailMessage extends MailSummary {
   text: string; links?: MailButton[]; html?: string | null; pictures_pending?: boolean; pictures_ask?: boolean;
+  /** The owner said not to fold this mail (a folding note): show it, its page too, unfolded. */
+  no_fold?: boolean;
   /** Where the quoted history starts in `text`: folded behind a button. */
   quote_at?: number;
 }
@@ -483,6 +485,13 @@ export function needsYou<T extends MailSummary>(threads: T[], max = 5): T[] {
     .sort((a, b) => rank(a) - rank(b) || b.at.localeCompare(a.at))
     .slice(0, max);
 }
+
+/** A folding note (the owner said the fold hid something): the fold's first line, the lines they marked, Don't fold. */
+export interface FoldNote { cut: string; lines: string[]; no_fold: boolean; at: string }
+
+/** The first lines (at most 8, non-empty, trimmed) of what a mail's fold hides, for the owner to mark. */
+export const foldedLines = (text: string, quoteAt: number | undefined, max = 8) =>
+  quoteAt === undefined ? [] : text.slice(quoteAt).split("\n").map((l) => l.trim()).filter(Boolean).slice(0, max);
 
 /** A size as people read it: 820 KB, 2.4 MB. */
 export function fileSize(n: number): string {

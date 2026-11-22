@@ -6,7 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
-import type { BundleDelivery, CustomBundle, FolderMail, SearchHit, UnsubscribeOptions, MailAttachment, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
+import type { BundleDelivery, CustomBundle, FolderMail, FoldNote, SearchHit, UnsubscribeOptions, MailAttachment, MailMovedTo, MoveTarget, MailDraft, MailDraftRequest, MailGreeting, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -1038,6 +1038,16 @@ export class HubClient {
   }
   mailUnsubscribe(id: string, how: "one_click" | "mailto", direct = false) {
     return this.req<{ ok: boolean; via?: "tor" | "direct"; draft?: boolean }>("POST", `/mail/messages/${encodeURIComponent(id)}/unsubscribe`, { how, ...(direct ? { direct: true } : {}) });
+  }
+  /** "Something important missing?": a folding note on a mail; every note; clearing them. Kept on the hub only. */
+  mailFolding(id: string, note: { lines: string[]; no_fold: boolean }) {
+    return this.req<FoldNote>("POST", `/mail/messages/${encodeURIComponent(id)}/folding`, note);
+  }
+  mailFoldNotes() {
+    return this.req<{ notes: { id: string; subject: string; from: string; note: FoldNote }[] }>("GET", "/mail/folding-notes");
+  }
+  mailClearFoldNotes() {
+    return this.req<{ cleared: number }>("DELETE", "/mail/folding-notes");
   }
   /** Triage on or off (off erases every kept triage). */
   mailTriage(on: boolean) {
