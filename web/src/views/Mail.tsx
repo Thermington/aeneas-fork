@@ -23,6 +23,7 @@ import {
   cardLink,
   type MailCard,
   type SearchHit,
+  selectAll,
   type FoldNote,
   foldedLines,
   needsYou,
@@ -300,6 +301,9 @@ export function Mail() {
     return out;
   }, [list.data, editing, view, messages, shown, pinnedOnly, delivery, openBundles, reminders, q]);
   const byId = useMemo(() => new Map(threads.map((t) => [t.id, t])), [threads]);
+  // The threads shown now, for Select all: the rows in sight (a closed bundle's mail is not).
+  const shownIds = navItems.filter((id) => byId.has(id));
+  const selAll = selectAll(shownIds, selected);
   const pick: LookValue["pick"] = (id, range) => {
     setSelected((s) => {
       const n = new Set(s);
@@ -416,6 +420,9 @@ export function Mail() {
         </button>
         {chosen.length ? (
           <div className="mailx-selbar" role="toolbar" aria-label="Selected mail">
+            <button type="button" className="mailx-selall" role="checkbox" aria-checked={selAll.state === "all" ? true : "mixed"} aria-label={selAll.state === "all" ? "Select none" : `Select all shown (${shownIds.length})`} title={selAll.state === "all" ? "Select none" : `Select all shown (${shownIds.length})`} onClick={() => { setSelected(selAll.next); if (!selAll.next.size) setMultiSnooze(false); }}>
+              <Icon name={selAll.state === "all" ? "check" : "minus"} />
+            </button>
             <h1>{chosen.length} selected</h1>
             <button type="button" onClick={() => void doneAll(chosen)}><Icon name={view === "done" ? "inbox" : "check"} /><span>{view === "done" ? "Move to Inbox" : "Done"}</span></button>
             {view !== "done" && <button type="button" onClick={() => setMultiSnooze((x) => !x)}><Icon name="clock" /><span>Snooze</span></button>}
@@ -1898,6 +1905,7 @@ const ICONS: Record<string, string> = {
   pencil: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
   reply: "M9 15l-5-5 5-5M4 10h10a6 6 0 0 1 6 6v3",
   send: "M4 12l16-8-6 16-3-7zM11 13l9-9",
+  minus: "M6 12h12",
   search: "M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM16 16l4 4",
   spam: "M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6zM12 8v5M12 16v.5",
   trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",

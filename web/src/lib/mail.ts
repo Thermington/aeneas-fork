@@ -493,6 +493,17 @@ export interface FoldNote { cut: string; lines: string[]; no_fold: boolean; at: 
 export const foldedLines = (text: string, quoteAt: number | undefined, max = 8) =>
   quoteAt === undefined ? [] : text.slice(quoteAt).split("\n").map((l) => l.trim()).filter(Boolean).slice(0, max);
 
+/**
+ * Select all: what the selection becomes when the select-all box is pressed. When every shown mail is selected,
+ * nothing; else every shown mail (only those: a mail out of sight, as in a closed bundle, is never swept along).
+ * `state`: how the box shows, all, some or none of the shown mail selected.
+ */
+export function selectAll(shown: string[], selected: Set<string>): { next: Set<string>; state: "all" | "some" | "none" } {
+  const n = shown.filter((id) => selected.has(id)).length;
+  const state = shown.length && n === shown.length ? "all" : n || selected.size ? "some" : "none";
+  return { next: state === "all" ? new Set() : new Set(shown), state };
+}
+
 /** A size as people read it: 820 KB, 2.4 MB. */
 export function fileSize(n: number): string {
   if (n < 1024) return `${n} B`;

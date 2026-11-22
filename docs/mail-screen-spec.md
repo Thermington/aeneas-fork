@@ -215,7 +215,9 @@ This part matters most. Mail is hostile input.
   hub without Tor, a second press after saying the sender will see the home's address), the sender's page (opened in the
   browser, its host shown), or a draft to their unsubscribe address; and Block the address or everyone at its domain
   (`POST /mail/settings/blocked`), their mail then going to Spam. The info panel lists blocked senders with Unblock.
-- **Selection:** click or Space on the circle; Shift extends it. The bar acts on everything selected: Done, Snooze
+- **Selection:** click or Space on the circle; Shift extends it. **(next PR)** The selection bar starts with a select-all box
+  (`selectAll`): a dash while some are selected, a check when all shown are; pressed, it selects every thread in sight
+  (never one in a closed bundle) or, when all are, none. The bar acts on everything selected: Done, Snooze
   (one picker for all), Pin (Unpin when all are pinned), Mark read, Mark unread, Delete and Spam **(next PR)**.
 - **Keys (desktop):** ↑ ↓ to move, Shift + ↑ ↓ to select while moving, Enter to open (or open and close a bundle), Esc to
   close and then clear the selection, Space to select, D Done, S Snooze, P Pin, U unread, R read, Delete or Backspace
