@@ -1785,3 +1785,12 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-selbar .mailx-selall[aria-checked="true"]::before { background: #fff; }
 .mailx-selbar .mailx-selall .mailx-icon { grid-area: 1 / 1; width: 14px; height: 14px; stroke-width: 2.6; }
 .mailx-selbar .mailx-selall[aria-checked="true"] .mailx-icon { color: var(--barc); }
+/*
+ * With the side list shown (768px and up), select all sits right above the rows' select circles: the title keeps the
+ * side list's width (210px, less the bar's 14px padding and 12px gap), so the selection starts where the list does, and
+ * the circle's center is 59px in, as the rows' circles are (16px page padding, 26px, half of 34px).
+ */
+@media (min-width: 768px) {
+  .mailx-bar.selecting .mailx-bar-left > h1 { flex: none; width: calc(var(--mailx-rail, 210px) - 26px); padding-right: 0; margin-right: 0; border-right: 0; overflow: hidden; text-overflow: ellipsis; }
+  .mailx-bar.selecting .mailx-selbar .mailx-selall { margin-left: 43px; }
+}

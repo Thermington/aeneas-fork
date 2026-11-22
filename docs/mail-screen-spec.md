@@ -217,7 +217,8 @@ This part matters most. Mail is hostile input.
   (`POST /mail/settings/blocked`), their mail then going to Spam. The info panel lists blocked senders with Unblock.
 - **Selection:** click or Space on the circle; Shift extends it. **(next PR)** The selection bar starts with a select-all box
   (`selectAll`): a dash while some are selected, a check when all shown are; pressed, it selects every thread in sight
-  (never one in a closed bundle) or, when all are, none. The bar acts on everything selected: Done, Snooze
+  (never one in a closed bundle) or, when all are, none. With the side list shown, it sits right above the rows' select
+  circles (the title keeps the side list's width), level with the bar's icons. The bar acts on everything selected: Done, Snooze
   (one picker for all), Pin (Unpin when all are pinned), Mark read, Mark unread, Delete and Spam **(next PR)**.
 - **Keys (desktop):** ↑ ↓ to move, Shift + ↑ ↓ to select while moving, Enter to open (or open and close a bundle), Esc to
   close and then clear the selection, Space to select, D Done, S Snooze, P Pin, U unread, R read, Delete or Backspace
