@@ -105,6 +105,9 @@ Messages with the same `thread` show as one row (`threadRows` in `lib/mail.ts`):
 3. **A bundle is one row per day,** placed where its newest mail is. It opens in place to list its mail, with **Sweep**.
 4. **Pinned mail always stands on its own,** never in a bundle. With **Pinned only**, only pinned mail shows.
 5. **Each day heading has Sweep:** it marks every unpinned thread under it done, with one Undo.
+6. **The actions' colors (next PR):** a row's Pin, Snooze and Done are round buttons in their places' colors (Pin
+   the Inbox's blue, Snooze Snoozed's amber, Done Done's green), the icon in that color on a light wash of it, solid with
+   a white icon when pointed at (Pin and Snooze also while on); Sweep is a pill in Done's green the same way.
 
 The time beside a row is the hour today, the weekday this week, else the date (with the year when it's not this year).
 

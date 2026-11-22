@@ -1217,7 +1217,22 @@ a.mailx-row { color: inherit; text-decoration: none; }
 .mailx-snooze-times button.link { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; }
 .mailx-snooze-own { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .mailx-group h2 { display: flex; align-items: center; justify-content: space-between; min-height: 30px; }
-.mailx-sweep { font-size: 12px; padding: 4px 8px; }
+/*
+ * Pin, Snooze and Done (2026-11-22), and Sweep with them: each in its place's color (Pin the Inbox's blue, Snooze
+ * Snoozed's amber, Done and Sweep Done's green), the icon and words in that color on a light wash of it, turning solid
+ * with white on it when pointed at or on. On a row they are round, like the bar's buttons.
+ */
+.mailx-act.act-pin { --c: var(--b-inbox); --ct: var(--bt-inbox); }
+.mailx-act.act-snooze { --c: var(--b-snoozed); --ct: var(--bt-snoozed); }
+.mailx-act.act-done, .mailx-act.mailx-sweep { --c: var(--b-done); --ct: var(--bt-done); }
+.mailx-act.act-pin, .mailx-act.act-snooze, .mailx-act.act-done, .mailx-act.mailx-sweep { color: var(--ct); background: color-mix(in srgb, var(--ct) 14%, transparent); font-weight: 600; }
+.mailx-act.act-pin:hover, .mailx-act.act-snooze:hover, .mailx-act.act-done:hover, .mailx-act.mailx-sweep:hover,
+.mailx-act.act-pin.on, .mailx-act.act-snooze.on { background: var(--c); color: #fff; }
+.mailx-act.act-pin .mailx-icon, .mailx-act.act-snooze .mailx-icon, .mailx-act.act-done .mailx-icon, .mailx-act.mailx-sweep .mailx-icon { stroke-width: 2.2; }
+.mailx-acts { gap: 6px; padding: 4px; border-radius: 22px; background: var(--mail-item); box-shadow: 0 1px 6px rgb(0 0 0 / .18); }
+.mailx-acts .mailx-act { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 50%; }
+.mailx-sweep { font-size: 13px; padding: 5px 12px 5px 9px; border-radius: 16px; }
+.mailx-sweep .mailx-icon { width: 16px; height: 16px; }
 .mailx-bundle-acts { display: flex; justify-content: flex-end; padding: 2px 8px; }
 /* Undo after Done or Sweep: at the bottom of the list, over it. */
 .mailx-undo { position: sticky; bottom: 8px; margin: 12px auto 0; width: fit-content; display: flex; gap: 16px; align-items: center; background: var(--text); color: var(--bg); padding: 8px 10px 8px 16px; border-radius: var(--radius); box-shadow: 0 6px 20px rgb(0 0 0 / .25); z-index: 3; }

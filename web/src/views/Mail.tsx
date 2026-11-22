@@ -847,8 +847,8 @@ function ReminderRow({ r, task, picking, setPicking }: { r: DueReminder; task: E
         <span className="when">{whenLabel(r.at)}</span>
       </a>
       <span className="mailx-acts">
-        <button type="button" className="mailx-act" title="Snooze the reminder" aria-label="Snooze" onClick={() => setPicking(!picking)}><Icon name="clock" /></button>
-        <button type="button" className="mailx-act" title="Done: marks the task done" aria-label="Done" onClick={() => task && void completeTask(task).catch((e) => setErr(plainError(e)))}><Icon name="check" /></button>
+        <button type="button" className="mailx-act act-snooze" title="Snooze the reminder" aria-label="Snooze" onClick={() => setPicking(!picking)}><Icon name="clock" /></button>
+        <button type="button" className="mailx-act act-done" title="Done: marks the task done" aria-label="Done" onClick={() => task && void completeTask(task).catch((e) => setErr(plainError(e)))}><Icon name="check" /></button>
       </span>
       {picking && (
         <div className="mailx-snooze mailx-remsnooze">
@@ -1155,7 +1155,7 @@ function PinButton({ m, labelled = false }: { m: MailThread; labelled?: boolean 
   const [busy, setBusy] = useState(false);
   const label = m.pinned ? "Unpin" : "Pin";
   return (
-    <button type="button" className={`mailx-act${m.pinned ? " on" : ""}`} aria-pressed={m.pinned} title={label} aria-label={label} disabled={busy}
+    <button type="button" className={`mailx-act act-pin${m.pinned ? " on" : ""}`} aria-pressed={m.pinned} title={label} aria-label={label} disabled={busy}
       onClick={async () => { setBusy(true); const was = m.pinned; await act((c) => c.mailPin(m.id, !was)); offerUndo(was ? "Unpinned" : "Pinned", () => act((c) => c.mailPin(m.id, was))); setBusy(false); }}>
       <Icon name="pin" />{labelled && <span>{label}</span>}
     </button>
@@ -1169,7 +1169,7 @@ function DoneButton({ m, labelled = false }: { m: MailThread; labelled?: boolean
   const back = m.state === "done";
   const label = back ? "Move to Inbox" : "Done";
   return (
-    <button type="button" className="mailx-act" title={back ? "Move back to the Inbox in iCloud" : "Done: moves it to Archive in iCloud"} aria-label={label} disabled={busy}
+    <button type="button" className="mailx-act act-done" title={back ? "Move back to the Inbox in iCloud" : "Done: moves it to Archive in iCloud"} aria-label={label} disabled={busy}
       onClick={async () => { setBusy(true); await move(back ? m.ids.done : m.ids.open, back ? "inbox" : "done"); setBusy(false); }}>
       <Icon name={back ? "inbox" : "check"} />{labelled && <span>{label}</span>}
     </button>
@@ -1186,7 +1186,7 @@ function SnoozeButton({ m, labelled = false }: { m: MailThread; labelled?: boole
   const showing = snoozeFor === m.id;
   return (
     <>
-      <button type="button" className={`mailx-act${showing ? " on" : ""}`} aria-expanded={showing} title={m.state === "snoozed" ? "Change when it comes back" : "Snooze: hide it until a time you pick"} aria-label="Snooze"
+      <button type="button" className={`mailx-act act-snooze${showing ? " on" : ""}`} aria-expanded={showing} title={m.state === "snoozed" ? "Change when it comes back" : "Snooze: hide it until a time you pick"} aria-label="Snooze"
         onClick={() => { setSnoozeFor(showing ? null : m.id); if (!showing) openMail(m.id); }}>
         <Icon name="clock" />{labelled && <span>{m.state === "snoozed" ? "Change snooze" : "Snooze"}</span>}
       </button>
