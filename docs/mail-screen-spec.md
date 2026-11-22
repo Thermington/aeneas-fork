@@ -55,7 +55,7 @@ Reload the list after every action, and when the screen comes back to the front.
     many there are; Spam and the owner's folders show unread; Sent and Trash show none.
 - **Top bar**, in the current view's color: the title (the view's name). In the middle are Refresh, the search box and
   the **Pinned only** switch (Inbox only, a pin inside its knob); on the right is **New mail** **(next PR)**. While mail
-  is selected, the bar becomes "N selected" with Done (Move to Inbox in Done), Snooze, Pin/Unpin, Mark read,
+  is selected, the view's name stays and "N selected" follows it, with Done (Move to Inbox in Done), Snooze, Pin/Unpin, Mark read,
   Mark unread and ✕. It keeps one height either way.
 - **Search** matches every word, ignoring case, in the sender's name, the address, the subject and the preview. It
   searches the current view. On a phone held upright (up to 560px) it is a magnifier beside Refresh **(next PR)**;

@@ -418,12 +418,14 @@ export function Mail() {
         <button type="button" className="mailx-menu" aria-label="Show Inbox, Snoozed, Done and the bundles" aria-expanded={menu} onClick={() => setMenu((x) => !x)}>
           <Icon name="menu" />
         </button>
-        {chosen.length ? (
+        {/* The view's name stays in sight while mail is selected, the selection's actions after it. */}
+        <h1>{title}</h1>
+        {!!chosen.length && (
           <div className="mailx-selbar" role="toolbar" aria-label="Selected mail">
             <button type="button" className="mailx-selall" role="checkbox" aria-checked={selAll.state === "all" ? true : "mixed"} aria-label={selAll.state === "all" ? "Select none" : `Select all shown (${shownIds.length})`} title={selAll.state === "all" ? "Select none" : `Select all shown (${shownIds.length})`} onClick={() => { setSelected(selAll.next); if (!selAll.next.size) setMultiSnooze(false); }}>
               <Icon name={selAll.state === "all" ? "check" : "minus"} />
             </button>
-            <h1>{chosen.length} selected</h1>
+            <span className="mailx-selcount">{chosen.length} selected</span>
             <button type="button" onClick={() => void doneAll(chosen)}><Icon name={view === "done" ? "inbox" : "check"} /><span>{view === "done" ? "Move to Inbox" : "Done"}</span></button>
             {view !== "done" && <button type="button" onClick={() => setMultiSnooze((x) => !x)}><Icon name="clock" /><span>Snooze</span></button>}
             <button type="button" onClick={() => pinAll(chosen)}><Icon name="pin" /><span>{chosen.every((t) => t.pinned) ? "Unpin" : "Pin"}</span></button>
@@ -433,7 +435,7 @@ export function Mail() {
             <button type="button" onClick={() => void relocate(chosen.flatMap(threadIds), "junk", "Moved to Spam", "inbox")}><Icon name="spam" /><span>Spam</span></button>
             <button type="button" className="mailx-selclear" onClick={() => { setSelected(new Set()); setMultiSnooze(false); }} aria-label="Clear the selection">✕</button>
           </div>
-        ) : <h1>{title}</h1>}
+        )}
         </div>
         {!chosen.length && (
           <div className="mailx-bar-mid">

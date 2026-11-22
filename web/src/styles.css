@@ -1148,7 +1148,8 @@ a.mailx-row { color: inherit; text-decoration: none; }
 @media (hover: none) { .mailx-pick { display: none; } .mailx.selecting .mailx-pick, .mailx-item.picked .mailx-pick, .mailx-card.picked > .mailx-pick { display: grid; opacity: 1; } }
 /* A selection's actions on one line (the bar keeps its height): in a narrow window they scroll sideways. */
 .mailx-selbar { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-.mailx-selbar h1 { margin-right: 10px; }
+.mailx-selbar .mailx-selcount { margin-right: 10px; white-space: nowrap; font-weight: 600; }
+.mailx-bar.selecting .mailx-bar-left > h1 { padding-right: 12px; margin-right: 4px; border-right: 1px solid rgb(255 255 255 / .4); }
 .mailx-selbar button { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius); flex: none; white-space: nowrap; }
 .mailx-selbar button:hover { background: rgb(0 0 0 / .2); }
 .mailx-selclear { margin-left: auto; }
