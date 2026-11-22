@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, backLaterToday, selectAll, foldedLines, needsYou, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, backLaterToday, selectAll, foldedLines, needsYou, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary, frameClick, checkFrameLinks } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -283,9 +283,13 @@ describe("mail screen rules", () => {
   it("the Mail screen shows mail HTML only in a frame where nothing runs, and links only what textParts checked", () => {
     const src = fs.readFileSync(path.join(__dirname, "../views/Mail.tsx"), "utf8");
     expect(src).not.toMatch(/dangerouslySetInnerHTML|innerHTML|renderMarkdown|insertAdjacentHTML|document\.write/);
-    // The hub's cleaned page goes in one iframe, sandboxed without scripts, popups, forms or navigation.
-    expect(src.match(/<iframe[^>]*>/g)).toEqual([`<iframe ref={ref} className="mailx-frame" title={title} sandbox="allow-same-origin" referrerPolicy="no-referrer" srcDoc={doc} />`]);
-    expect(src).not.toMatch(/allow-scripts|allow-popups|allow-forms|allow-top-navigation|\.src\s*=/);
+    // The hub's cleaned page goes in one iframe, sandboxed without scripts, forms or navigation of the app. Popups are
+    // allowed (and leave the sandbox) only so that WebKit, which runs none of the screen's listeners in the frame, can
+    // open a link the user clicks; every link is checked first (checkFrameLinks), so only http, https and mailto open.
+    expect(src.match(/<iframe[^>]*>/g)).toEqual([`<iframe ref={ref} className="mailx-frame" title={title} sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" srcDoc={doc} />`]);
+    expect(src).not.toMatch(/allow-scripts|allow-forms|allow-top-navigation|allow-modals|allow-downloads|allow-pointer-lock|allow-presentation|\.src\s*=/);
+    // The links are checked on every load, before anything else reads the page.
+    expect(src).toMatch(/const ready = \(\) => \{\n\s+const d = frame\.contentDocument;\n\s+if \(!d\) return;[\s\S]{0,1200}checkFrameLinks\(d\.querySelectorAll\("a\[href\], area\[href\]"\)\);/);
     // The only href from outside the app's own screens (#/...) is a piece textParts made and checked.
     expect((src.match(/href=\{[^}]+\}/g) ?? []).filter((h) => !h.startsWith("href={`#")).sort()).toEqual(["href={p.href}"]);
     expect(src.match(/<Parts parts=\{[^}]+\}/g)).toEqual(["<Parts parts={textParts(line)}"]);
@@ -297,6 +301,37 @@ describe("mail screen rules", () => {
     expect(frameLink("javascript:alert(1)")).toBeNull();
     expect(frameLink("file:///c:/x")).toBeNull();
     expect(frameLink(null)).toBeNull();
+  });
+
+  it("keeps only the links frameLink accepts, each opening in a new tab with no opener, no referrer and its real address shown", () => {
+    const link = (attrs: Record<string, string>) => {
+      const a = { attrs: { ...attrs } as Record<string, string>, getAttribute: (n: string) => a.attrs[n] ?? null, setAttribute: (n: string, v: string) => { a.attrs[n] = v; }, removeAttribute: (n: string) => { delete a.attrs[n]; } };
+      return a;
+    };
+    const ok = link({ href: "https://shop.example/a b", title: "https://other.example/", ping: "https://track.example/", target: "_top", referrerpolicy: "unsafe-url", download: "x" });
+    const mail = link({ href: "mailto:help@shop.example" });
+    const bad = ["javascript:alert(1)", "data:text/html,hi", "file:///etc/hosts", "/relative", "relative", "//shop.example/x", "vbscript:x", " JAVASCRIPT:alert(1)"].map((href) => link({ href, target: "_self", title: "https://shop.example/", rel: "opener" }));
+    checkFrameLinks([ok, mail, ...bad]);
+    expect(ok.attrs).toEqual({ href: "https://shop.example/a%20b", title: "https://shop.example/a%20b", target: "_blank", rel: "noopener noreferrer" });
+    expect(mail.attrs).toEqual({ href: "mailto:help@shop.example", title: "mailto:help@shop.example", target: "_blank", rel: "noopener noreferrer" });
+    for (const b of bad) expect(b.attrs).toEqual({});
+  });
+
+  it("takes a click and a middle click on a link inside a mail, so the page never follows one itself", () => {
+    const on = (href: string | null) => ({ closest: (sel: string) => (sel === "a" ? { getAttribute: () => href } : null) });
+    const off = { closest: () => null };
+    expect(frameClick({ type: "click", button: 0, target: on("https://shop.example/a") })).toEqual({ open: "https://shop.example/a" });
+    // Firefox opens a middle-clicked link in a new tab by itself (an auxclick, not a click) unless the screen takes it.
+    expect(frameClick({ type: "auxclick", button: 1, target: on("https://shop.example/a") })).toEqual({ open: "https://shop.example/a" });
+    // A link frameLink refuses is still taken, and opens nothing.
+    expect(frameClick({ type: "auxclick", button: 1, target: on("javascript:alert(1)") })).toEqual({ open: null });
+    expect(frameClick({ type: "click", button: 0, target: on(null) })).toEqual({ open: null });
+    // Not a link, or the right button (its menu stays the browser's): left alone.
+    expect(frameClick({ type: "click", button: 0, target: off })).toBeNull();
+    expect(frameClick({ type: "auxclick", button: 2, target: on("https://shop.example/a") })).toBeNull();
+    expect(frameClick({ type: "click", button: 0, target: null })).toBeNull();
+    const src = fs.readFileSync(path.join(__dirname, "../views/Mail.tsx"), "utf8");
+    expect(src).toMatch(/d\.addEventListener\("auxclick", onClick\)/);
   });
 });
 

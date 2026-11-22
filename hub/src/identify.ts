@@ -8,6 +8,7 @@ import { readMachineInfo, updateMachineInfo } from "./machineinfo.js";
 import { loadHosts, readMachines } from "./ai/hosts.js";
 import { techThings, targetHost } from "./tech.js";
 import { errCode } from "./logsafe.js";
+import { nextMatch } from "./imports/mail-text.js";
 
 /**
  * What kind of device each thing in Tech is (Tech, since 2026-11-20): a computer (servers, NAS and VMs too), network
@@ -119,9 +120,31 @@ function tcp(host: string, port: number, ms = PROBE_MS): Promise<{ open: boolean
     const finish = (open: boolean) => { if (done) return; done = true; s.destroy(); resolve({ open, ...(buf ? { greeting: buf.split(/\r?\n/)[0].slice(0, 200) } : {}) }); };
     s.setTimeout(ms, () => finish(!!s.remoteAddress && s.readyState === "open"));
     s.once("connect", () => { if (port !== 22) finish(true); else setTimeout(() => finish(true), 1200); });
-    s.on("data", (d) => { buf += d.toString("latin1"); if (/\n/.test(buf)) finish(true); });
+    // Only the new piece is looked at for the line's end, and only the start is kept: a device that sends megabytes
+    // with no line break neither fills the hub's memory nor has all it sent read again with every piece.
+    s.on("data", (d) => { const t = d.toString("latin1"); if (buf.length < 4096) buf += t; if (t.includes("\n")) finish(true); });
     s.once("error", () => finish(false));
   });
+}
+
+/**
+ * A web page's title: what `/<title[^>]*>([^<]{1,200})<\/title>/i` found, in one pass. As that pattern it searched to
+ * the end of the page again from every `<title` that was never closed: a device's page of nothing but `<title` (the
+ * 64 KB and more read of it) held the hub for more than a second.
+ */
+export function webPageTitle(body: string): string | undefined {
+  const open = /<title/gi;
+  const gt = nextMatch(body, />/g);
+  const lt = nextMatch(body, /</g);
+  for (let m = open.exec(body); m; m = open.exec(body)) {
+    const g = gt(open.lastIndex);
+    if (g.at < 0) return undefined; // no ">" from here on: no later <title has one either
+    // The title is what runs from the ">" to the next "<", which must start "</title>", 1 to 200 characters.
+    const c = lt(g.end);
+    if (c.at < 0) return undefined;
+    if (c.at > g.end && c.at - g.end <= 200 && /^<\/title>/i.test(body.slice(c.at, c.at + 8))) return body.slice(g.end, c.at);
+  }
+  return undefined;
 }
 
 /** The title of a device's web page (or its Server header), following one redirect on the same device. */
@@ -141,7 +164,7 @@ function webTitle(host: string, port: number, secure: boolean, path = "/", hop =
       res.setEncoding("utf8");
       res.on("data", (c: string) => { if (body.length < 65536) body += c; });
       res.on("end", () => {
-        const t = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(body)?.[1];
+        const t = webPageTitle(body);
         const text = (t ?? (typeof res.headers.server === "string" ? res.headers.server : "")).replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
         resolve(text || undefined);
       });

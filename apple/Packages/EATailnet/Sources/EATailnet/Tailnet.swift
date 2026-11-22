@@ -175,6 +175,9 @@ actor TailnetRunner {
             let (config2, _) = try await URLSessionConfiguration.tailscaleSession(node)
             config2.timeoutIntervalForRequest = 20
             config2.waitsForConnectivity = false
+            // No URL cache, as for every hub session (HTTPTransport.sessionConfiguration): hub answers stay off disk.
+            config2.urlCache = nil
+            config2.requestCachePolicy = .reloadIgnoringLocalCacheData
             let network = try? await api.backendStatus().CurrentTailnet?.Name
             report(.connected(network: network, session: URLSession(configuration: config2)))
         } catch {

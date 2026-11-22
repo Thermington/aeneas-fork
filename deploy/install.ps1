@@ -12,12 +12,14 @@
 #      unless a model server already answers there. No model is downloaded: the Welcome page shows the one that fits;
 #   5. Tor in tor\: the assistant's web lookups (off until turned on in the app) leave only through it;
 #   6. a scheduled task, "\Aeneas\Aeneas hub", that starts the hub at boot, before anyone logs in. Windows asks once for
-#      permission (an administrator) to register it. deploy\windows\hub-service.ps1 then keeps the hub, Ollama and Tor
-#      running and asks Windows not to sleep while on AC power;
+#      permission (an administrator) to register it, and under the same prompt the Microsoft Visual C++ runtime is
+#      installed when the PC lacks it (the Direct link needs it). deploy\windows\hub-service.ps1 then keeps the hub,
+#      Ollama and Tor running and asks Windows not to sleep while on AC power;
 #   7. HTTPS on your tailnet through Tailscale Serve, and a link that opens the Welcome page already connected.
 # Downloads: Node from nodejs.org and MinGit and Ollama from GitHub, each against its published SHA-256; Tor from
 # torproject.org against its sums file; the app from GitHub with git, against its commits; npm packages against the lock
-# file's hashes.
+# file's hashes; the Microsoft Visual C++ runtime, only on a PC without it and when the installer does not carry it,
+# from Microsoft (aka.ms), run only when its Authenticode signature is Microsoft's and valid.
 #
 # Options (environment variables, set in the same PowerShell first, like $env:EA_PORT = "8788"): EA_ROOT, EA_PORT
 # (8787), EA_REPO_URL, EA_REF (main), EA_MODELS_DIR (where models go, without asking), EA_NO_OLLAMA=1, EA_OLLAMA_PORT
@@ -93,6 +95,63 @@ function Install-AeneasHub {
   function Port-Busy([int]$port) {
     $c = New-Object Net.Sockets.TcpClient
     try { $c.Connect('127.0.0.1', $port); return $true } catch { return $false } finally { $c.Close() }
+  }
+
+  # The Microsoft Visual C++ runtime (vcruntime140.dll, from the Visual C++ 2015-2022 Redistributable, x64): the
+  # Direct link's library (@number0/iroh) is built with Microsoft's compiler and needs it, and a clean Windows 11 may
+  # not have it. Step 0 installs it when it is missing, with vc_redist.x64.exe from inside the installer (EA_VC_REDIST)
+  # or, run without the installer, downloaded from Microsoft; either way only when Microsoft signed that file.
+  # deploy\windows\installer\build.ps1 and deploy\windows\test-vcruntime.ps1 use these same functions.
+  #
+  # Whether the runtime's registry entry says it is installed: Installed 1 and Major 14 or more.
+  function Test-VcRuntimeEntry {
+    param($Values)
+    if (-not $Values) { return $false }
+    $installed = 0; $major = 0
+    if (-not [int]::TryParse([string]$Values.Installed, [ref]$installed)) { return $false }
+    if (-not [int]::TryParse([string]$Values.Major, [ref]$major)) { return $false }
+    return ($installed -eq 1 -and $major -ge 14)
+  }
+  # Whether the x64 runtime 14.x is on this PC: its registry entry (in either registry view), else the DLL in System32.
+  # The places looked at are parameters, so a test can point them where nothing is.
+  function Test-VcRuntime {
+    param(
+      [string[]]$Keys = @('HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64'),
+      [string]$Dll = (Join-Path $env:WINDIR 'System32\vcruntime140.dll')
+    )
+    foreach ($k in $Keys) {
+      $v = Get-ItemProperty -LiteralPath $k -ErrorAction SilentlyContinue
+      if (Test-VcRuntimeEntry $v) { return [pscustomobject]@{ Present = $true; From = 'registry'; Version = ([string]$v.Version).TrimStart('v') } }
+    }
+    if ($Dll -and (Test-Path -LiteralPath $Dll -PathType Leaf)) { return [pscustomobject]@{ Present = $true; From = 'dll'; Version = [string](Get-Item -LiteralPath $Dll).VersionInfo.FileVersion } }
+    return [pscustomobject]@{ Present = $false; From = ''; Version = '' }
+  }
+  # Whether a certificate's subject (or issuer, -Issuer) is Microsoft Corporation's: the organization (O=), and for a
+  # subject also the common name (CN=), exactly that. "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond,
+  # S=Washington, C=US" is; "CN=Microsoft Corporation Ltd, O=Someone" is not.
+  function Test-MicrosoftName {
+    param([string]$Name, [switch]$Issuer)
+    $part = { param($key) $m = [regex]::Match($Name, "(?:^|,\s*)$key=(""[^""]*""|[^,]*)"); if ($m.Success) { $m.Groups[1].Value.Trim() } else { $null } }
+    if ((& $part 'O') -cne 'Microsoft Corporation') { return $false }
+    return ($Issuer -or (& $part 'CN') -ceq 'Microsoft Corporation')
+  }
+  # Whether a file is Microsoft's Visual C++ x64 runtime installer, signed by Microsoft: its Authenticode signature is
+  # Valid (whole, and from a certificate Windows trusts), signed by Microsoft Corporation with a certificate Microsoft
+  # issued, and the file says it is the x64 Redistributable, version 14.
+  function Test-VcRedistFile {
+    param([string]$Path)
+    $out = [pscustomobject]@{ Ok = $false; Status = 'missing'; Signer = ''; Product = ''; Version = '' }
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $out }
+    $s = Get-AuthenticodeSignature -LiteralPath $Path
+    $c = $s.SignerCertificate
+    $i = (Get-Item -LiteralPath $Path).VersionInfo
+    $out.Status = [string]$s.Status
+    $out.Signer = if ($c) { [string]$c.Subject } else { '' }
+    $out.Product = [string]$i.ProductName
+    $out.Version = [string]$i.ProductVersion
+    $out.Ok = $s.Status -eq 'Valid' -and $c -and (Test-MicrosoftName $c.Subject) -and (Test-MicrosoftName $c.Issuer -Issuer) -and
+      $out.Product -match 'Visual C\+\+ .*Redistributable \(x64\)' -and $out.Version -match '^14\.'
+    return $out
   }
 
   # Programs the hub's service runs are held (stopped, not started again) while their files are replaced: Windows
@@ -193,14 +252,50 @@ function Install-AeneasHub {
       if ((Sha256 "$Work\$tsMsi") -ne $want) { Fail 'the Tailscale download does not match its published checksum, so it was not used' }
       $msi = "$Work\$tsMsi"
     }
-    if ($msi -or -not $taskOk -or $needFw -or $dropFw) {
+    # The Microsoft Visual C++ runtime, for the Direct link (whichever way was chosen: Settings can switch to it later).
+    # Missing, it is installed under the same single permission prompt; if that fails the hub still installs, without
+    # the Direct link, and the line says how to fix it.
+    $vc = Test-VcRuntime
+    $vcExe = ''
+    $vcResult = Join-Path $Work 'vc-redist-result.txt'
+    $vcLink = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
+    $vcFix = "To fix it, install the Microsoft Visual C++ Redistributable (x64) from $vcLink, then run this installer again"
+    if ($vc.Present) { Say "The Microsoft Visual C++ runtime that the Direct link needs is on this PC ($($vc.Version))" }
+    else {
+      $vcExe = $env:EA_VC_REDIST
+      if ($vcExe -and (Test-Path -LiteralPath $vcExe)) { Say 'This PC does not have the Microsoft Visual C++ runtime that the Direct link needs: installing it from the copy inside this installer' }
+      else {
+        Say 'This PC does not have the Microsoft Visual C++ runtime that the Direct link needs: downloading it from Microsoft (about 25 MB)'
+        $vcExe = "$Work\vc_redist.x64.exe"
+        if (-not (Fetch $vcExe $vcLink 600)) { $vcExe = '' }
+      }
+      $chk = Test-VcRedistFile $vcExe
+      if ($chk.Ok) { Note "Signed by Microsoft (signature $($chk.Status)): $($chk.Product)" }
+      else {
+        Say "The Microsoft Visual C++ runtime was not installed: $(if ($chk.Status -eq 'missing') { 'the download did not finish' } else { "its installer is not signed by Microsoft (signature $($chk.Status), $(if ($chk.Signer) { $chk.Signer } else { 'no signer' }))" }), so it was not run. The hub still installs; the Direct link stays off until the runtime is on this PC. $vcFix"
+        $vcExe = ''
+      }
+    }
+    if ($msi -or $vcExe -or -not $taskOk -or $needFw -or $dropFw) {
       # Its settings go in a file beside it: Windows PowerShell 5.1 drops the quotes inside an argument it passes to
       # another program, and the task's command line quotes its paths (a user name may have a space).
       $reg = Join-Path $Work 'with-permission.ps1'
-      Write-Text $reg @'
-param([string]$Spec)
+      # The signature check is the one above (Test-VcRedistFile), copied in after the param line.
+      Write-Text $reg ("param([string]`$Spec)`nfunction Test-MicrosoftName {${function:Test-MicrosoftName}}`nfunction Test-VcRedistFile {${function:Test-VcRedistFile}}`n" + @'
 $ErrorActionPreference = 'Stop'
 $j = [IO.File]::ReadAllText($Spec) | ConvertFrom-Json
+if ($j.vcredist) {
+  # Checked again just before it runs as an administrator. What it said goes back in a file (this window is hidden),
+  # and nothing here stops the steps after it.
+  $said = 'not signed by Microsoft'
+  try {
+    if ((Test-VcRedistFile ([string]$j.vcredist)).Ok) {
+      $p = Start-Process -FilePath ([string]$j.vcredist) -ArgumentList "/install /quiet /norestart /log `"$($j.vcLog)`"" -Wait -PassThru
+      $said = [string]$p.ExitCode
+    }
+  } catch { $said = $_.Exception.Message }
+  try { [IO.File]::WriteAllText([string]$j.vcResult, $said) } catch { }
+}
 if ($j.msi) {
   $p = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$($j.msi)`" /quiet /norestart" -Wait -PassThru
   if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { exit 2 }
@@ -237,11 +332,12 @@ if ($j.arguments) {
   $sddl = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGWGX;;;$($j.sid))"
   $null = $folder.RegisterTaskDefinition('Aeneas hub', $d, 6, [string]$j.user, $null, 2, $sddl)
 }
-'@
+'@)
       $spec = Join-Path $Work 'with-permission.json'
-      Write-Text $spec (ConvertTo-Json -InputObject ([ordered]@{ msi = $msi; user = $me.Name; sid = $me.User.Value; arguments = $(if ($taskOk) { '' } else { $action }); description = $desc; firewall = $(if ($needFw) { $Port } else { 0 }); dropFirewall = $dropFw; firewallName = $FwName; program = $NodeExe }))
+      Write-Text $spec (ConvertTo-Json -InputObject ([ordered]@{ msi = $msi; user = $me.Name; sid = $me.User.Value; arguments = $(if ($taskOk) { '' } else { $action }); description = $desc; firewall = $(if ($needFw) { $Port } else { 0 }); dropFirewall = $dropFw; firewallName = $FwName; program = $NodeExe; vcredist = $vcExe; vcResult = $vcResult; vcLog = (Join-Path $Logs 'vc-redist.log') }))
       $what = @()
       if ($msi) { $what += 'install Tailscale' }
+      if ($vcExe) { $what += 'install the Microsoft Visual C++ runtime that the Direct link needs' }
       if ($needFw) { $what += "let devices on your home network reach the hub (firewall rules for its port $Port and for Bonjour, so devices find it again after the router gives this PC a new address; private networks only)" }
       if ($dropFw) { $what += 'remove the firewall rule for the home network, which this choice no longer needs' }
       if (-not $taskOk) { $what += 'register the task that starts the hub at boot, before anyone logs in' }
@@ -251,6 +347,11 @@ if ($j.arguments) {
         try { Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$reg`" -Spec `"$spec`"" } catch { }
       }
       $ts = Find-Tailscale
+      if ($vcExe) {
+        $said = if (Test-Path -LiteralPath $vcResult) { ([IO.File]::ReadAllText($vcResult)).Trim() } else { '' }
+        if ((Test-VcRuntime).Present) { Say "The Microsoft Visual C++ runtime is installed$(if ($said -eq '3010') { ' (Windows finishes it at the next restart)' })" }
+        else { Say "The Microsoft Visual C++ runtime could not be installed ($(if ($said) { "its installer said $said; its log is $Logs\vc-redist.log" } else { 'Windows did not get permission' })). The hub still installs; the Direct link stays off until the runtime is on this PC. $vcFix" }
+      }
       if ($needFw -and -not (Get-NetFirewallRule -DisplayName $FwName -ErrorAction SilentlyContinue)) { Fail 'Windows did not get permission to let your home network reach the hub. Run the installer again and choose Yes when Windows asks' }
       if ($Method -eq 'tailscale' -and -not $ts) { Fail 'Tailscale could not be installed: Windows did not get permission. Run the installer again and choose Yes when Windows asks' }
       if (-not $taskOk) {

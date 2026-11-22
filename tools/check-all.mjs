@@ -8,7 +8,7 @@
 //
 //   node tools/check-all.mjs [--apple]
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,10 +64,27 @@ const GIT_HOOK_VARS = ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CO
  * cannot read the Rust crates instead of noting it) and without git's hook variables, so the checks see what they
  * see on GitHub and when run by hand.
  */
-export function stepEnv(from) {
+export function stepEnv(from, developerDir = selectedXcode()) {
   const env = { ...from, CI: "1" };
   for (const k of GIT_HOOK_VARS) delete env[k];
+  // On a Mac, the Xcode that xcode-select names, named again for every tool: with the command line tools also
+  // installed, xcrun picked their newer macOS SDK, which the selected Xcode's compiler cannot build with (a macOS
+  // update brought one on 2026-11-21 and every swift test failed).
+  if (developerDir && !env.DEVELOPER_DIR) env.DEVELOPER_DIR = developerDir;
+  // The Xcode's own macOS SDK is named too. Apple's git (through its xcrun shim) hands its hooks SDKROOT set to the
+  // command line tools' SDK, so a push's checks built against that one whatever DEVELOPER_DIR said.
+  const sdk = developerDir && join(developerDir, "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk");
+  if (sdk && existsSync(sdk) && (!env.SDKROOT || env.SDKROOT.startsWith("/Library/Developer/CommandLineTools/"))) env.SDKROOT = sdk;
   return env;
+}
+
+/** The developer folder xcode-select names on a Mac (an Xcode, not the command line tools), else null. */
+function selectedXcode() {
+  if (process.platform !== "darwin") return null;
+  try {
+    const dir = spawnSync("xcode-select", ["-p"], { encoding: "utf8", timeout: 10_000 }).stdout.trim();
+    return dir.includes(".app/") ? dir : null;
+  } catch { return null; }
 }
 
 function main() {

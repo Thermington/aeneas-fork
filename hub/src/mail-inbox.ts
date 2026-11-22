@@ -645,9 +645,9 @@ export function saveMailNotify(db: DB, body: Record<string, unknown>): MailNotif
   if (body.detail !== undefined) { if (body.detail !== "full" && body.detail !== "sender" && body.detail !== "count") throw new StoreError(422, "detail is full, sender or count"); n.detail = body.detail; }
   if (body.bundle !== undefined) {
     if (typeof body.bundle !== "string" || typeof body.on !== "boolean") throw new StoreError(422, "bundle is a bundle's id, with on true or false");
-    body.bundle = currentBundleId(body.bundle);
-    if (!(BUNDLE_IDS as readonly string[]).includes(body.bundle) && !customBundles(db).some((b) => b.id === body.bundle)) throw new StoreError(404, "there is no such bundle");
-    n.bundles = body.on ? [...new Set([...n.bundles, body.bundle])] : n.bundles.filter((b) => b !== body.bundle);
+    const bundle = currentBundleId(body.bundle);
+    if (!(BUNDLE_IDS as readonly string[]).includes(bundle) && !customBundles(db).some((b) => b.id === bundle)) throw new StoreError(404, "there is no such bundle");
+    n.bundles = body.on ? [...new Set([...n.bundles, bundle])] : n.bundles.filter((b) => b !== bundle);
   }
   db.prepare("INSERT INTO settings (key, value) VALUES ('mail_notify', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(n));
   return n;
@@ -710,7 +710,7 @@ export function lastDelivery(d: BundleDelivery, now: Date): Date | null {
 
 /**
  * Held bundles (once a day, once a week) whose time has come since the last look, and that the owner switched on:
- * one notification each for the mail they bring to the Inbox ("Promos: 5 new mails: …"). Run every minute.
+ * one notification each for the mail they bring to the Inbox ("Promotions: 5 new mails: …"). Run every minute.
  */
 export function notifyDeliveries(hub: Hub, now = new Date()): number {
   const db = hub.mailDb;

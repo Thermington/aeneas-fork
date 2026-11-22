@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { makeHub, fileMode } from "./helpers.js";
 import { norm, stableId } from "../src/imports/util.js";
-import { filmsFromRss } from "../src/imports/letterboxd.js";
+import { FEED_MAX, filmsFromRss } from "../src/imports/letterboxd.js";
 import { TOOLS } from "../src/ai/tools.js";
 
 type Route = (url: URL) => { status?: number; json?: unknown; text?: string };
@@ -167,6 +167,38 @@ test("letterboxd: the diary feed brings films, and the next read adds new watche
     assert.deepEqual(year.films.map((f: any) => [f.title, f.times_watched]), [["Alien", 2], ["Heat", 1]]);
     assert.equal(((await (await t.api("/connections/letterboxd", { method: "DELETE" })).json()) as any).connected, false);
     assert.equal(t.hub.store.list({ kind: "film" }).length, 2, "unlinking keeps the films");
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("letterboxd: a feed larger than FEED_MAX is refused, and what is past the limit is never read", async () => {
+  const t = makeHub();
+  try {
+    let pulled = 0;
+    let lengthSaid: string | null = null;
+    const endless = () => new ReadableStream<Uint8Array>({
+      pull(c) { const chunk = new TextEncoder().encode(`<item>${"x".repeat(65_530)}`); pulled += chunk.byteLength; c.enqueue(chunk); },
+    });
+    t.hub.fetch = (async (input: string | URL | Request) => {
+      const u = new URL(String(input));
+      if (u.pathname !== "/gnome/rss/") return new Response("", { status: 404 });
+      return lengthSaid ? new Response(endless(), { headers: { "content-length": lengthSaid } }) : new Response(endless());
+    }) as typeof fetch;
+    // A server that does not say how big its answer is: read up to the limit, then stopped.
+    const res = await t.api("/connections/letterboxd", { method: "PUT", json: { username: "gnome" } });
+    assert.equal(res.status, 502);
+    assert.match(((await res.json()) as any).error, /Letterboxd sent more than the hub reads/);
+    assert.ok(pulled > FEED_MAX && pulled < FEED_MAX + 4 * 65_536, `read ${pulled} bytes`);
+    // One that says: refused before a byte of it is read.
+    pulled = 0;
+    lengthSaid = String(FEED_MAX + 1);
+    assert.equal((await t.api("/connections/letterboxd", { method: "PUT", json: { username: "gnome" } })).status, 502);
+    assert.ok(pulled <= 2 * 65_536, `read ${pulled} bytes`);
+    // A feed within the limit is read as before.
+    t.hub.fetch = fakeFetch((u) => (u.pathname === "/gnome/rss/" ? { text: RSS } : { status: 404 }));
+    const ok = await (await t.api("/connections/letterboxd", { method: "PUT", json: { username: "gnome" } })).json() as any;
+    assert.equal(ok.sync.entries, 2);
   } finally {
     t.cleanup();
   }

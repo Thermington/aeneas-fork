@@ -4,6 +4,8 @@
  * `wiki-media:<pageId>/<file>`; the wiki resolves both when a page is read, so a page added later still links.
  */
 
+import { nextMatch } from "./imports/mail-text.js";
+
 interface El { tag: string; attrs: Record<string, string>; kids: Node[] }
 type Node = El | string;
 
@@ -24,25 +26,84 @@ export function decodeEntities(s: string): string {
 }
 
 const VOID = new Set(["br", "hr", "img", "col"]);
+/**
+ * The deepest elements nest in a page as read. An element opened deeper than this is not kept as one: its text goes
+ * into the element at the limit as plain text, shown where that element shows text (a table row shows only its cells,
+ * so text that lands straight in a row is dropped). Real pages nest a few dozen deep (layouts, macros, tables, lists); a page
+ * nested about 100,000 deep overflowed the stack of the converter, which walks the tree by recursion, and failed the
+ * whole space's sync (2026-11-22).
+ */
+export const MAX_DEPTH = 200;
+
+/**
+ * Each line break with two or more spaces before it, as markdown's hard break: those spaces, the break and the spaces
+ * after it as "  \n". What the pattern ` *  \n *` (global, replaced by "  \n") gave, in one pass: it tried every space
+ * of a long run again (a page of 600,000 characters of `<b> </b>`: four seconds, 2026-11-22).
+ */
+export function hardBreaks(s: string): string {
+  let out = "";
+  let at = 0;
+  for (let nl = s.indexOf("\n"); nl >= 0; nl = s.indexOf("\n", nl + 1)) {
+    // The spaces before this break, back to where the last replacement ended.
+    let r = nl;
+    while (r > at && s[r - 1] === " ") r--;
+    if (nl - r < 2) continue;
+    let e = nl + 1;
+    while (e < s.length && s[e] === " ") e++;
+    out += `${s.slice(at, r)}  \n`;
+    at = e;
+    nl = e - 1;
+  }
+  return out + s.slice(at);
+}
 
 export function parseStorage(src: string): El {
   const root: El = { tag: "#root", attrs: {}, kids: [] };
   const stack: El[] = [root];
-  const re = /<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\/([\w:.-]+)\s*>|<([\w:.-]+)((?:\s+[\w:.-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'))?)*)\s*(\/?)>|([^<]+)|(<)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(src))) {
+  /** How many elements of each name are open (on the stack). */
+  const opened = new Map<string, number>();
+  // One token at a time, each where the last ended (the last two kinds take any character, so there is always one).
+  // A CDATA section and a comment are read by hand: as the pattern's first two kinds (`<!\[CDATA\[([\s\S]*?)\]\]>`,
+  // `<!--[\s\S]*?-->`) they searched to the end of the page again from every one never closed, and a page of 600,000
+  // characters of `<!--` took 23 seconds (2026-11-22). Its end, looked for once and remembered, gives the same
+  // tokens; one never closed is a "<" as before.
+  const re = /<\/([\w:.-]+)\s*>|<([\w:.-]+)((?:\s+[\w:.-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'))?)*)\s*(\/?)>|([^<]+)|(<)/g;
+  const cdataEnd = nextMatch(src, /\]\]>/g);
+  const commentEnd = nextMatch(src, /-->/g);
+  for (let at = 0; at < src.length;) {
     const top = stack[stack.length - 1];
-    if (m[1] !== undefined) top.kids.push(m[1]);
-    else if (m[2]) {
+    if (src.startsWith("<![CDATA[", at)) {
+      const c = cdataEnd(at + 9);
+      if (c.at >= 0) { top.kids.push(src.slice(at + 9, c.at)); at = c.end; continue; }
+    } else if (src.startsWith("<!--", at)) {
+      const c = commentEnd(at + 4);
+      if (c.at >= 0) { at = c.end; continue; }
+    }
+    re.lastIndex = at;
+    // The groups as they were numbered with the first two kinds in the pattern: m[2] a closing tag, m[3] to m[5] an
+    // opening one, m[6] text, m[7] a lone "<".
+    const r = re.exec(src)!;
+    at = re.lastIndex;
+    const m = [r[0], undefined, ...r.slice(1)];
+    if (m[2]) {
       const name = m[2].toLowerCase();
-      const at = stack.map((e) => e.tag).lastIndexOf(name);
-      if (at > 0) stack.length = at;
+      // The innermost open element of that name, and all opened inside it, close; a name with none open closes
+      // nothing. Counting what is open spares a look down the whole stack for every closing tag that matches none
+      // (thousands of unclosed elements, then thousands of closing tags: as `stack.map(…).lastIndexOf(name)`, seconds).
+      if (opened.get(name)) {
+        let open = stack.length - 1;
+        while (stack[open].tag !== name) open--;
+        for (let i = open; i < stack.length; i++) opened.set(stack[i].tag, opened.get(stack[i].tag)! - 1);
+        stack.length = open;
+      }
+    } else if (m[3] && stack.length > MAX_DEPTH) {
+      // Too deep to be kept as an element: what is inside it is read into the element around it, as text.
     } else if (m[3]) {
       const attrs: Record<string, string> = {};
       for (const a of (m[4] ?? "").matchAll(/([\w:.-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/g)) attrs[a[1].toLowerCase()] = decodeEntities(a[2] ?? a[3] ?? "");
       const el: El = { tag: m[3].toLowerCase(), attrs, kids: [] };
       top.kids.push(el);
-      if (!m[5] && !VOID.has(el.tag)) stack.push(el);
+      if (!m[5] && !VOID.has(el.tag)) { stack.push(el); opened.set(el.tag, (opened.get(el.tag) ?? 0) + 1); }
     } else if (m[6] !== undefined) top.kids.push(decodeEntities(m[6]));
     else if (m[7]) top.kids.push("<");
   }
@@ -80,7 +141,7 @@ class Renderer {
     const out: string[] = [];
     let buf = "";
     const flush = () => {
-      const t = buf.replace(/ *  \n */g, "  \n").trim();
+      const t = hardBreaks(buf).trim();
       if (t) out.push(t);
       buf = "";
     };
@@ -240,7 +301,9 @@ class Renderer {
 }
 
 function fence(code: string, lang: string): string {
-  const body = code.replace(/^\n+|\s+$/g, "");
+  // `code.replace(/^\n+|\s+$/g, "")`: \s+$ tried every space of a long run again (300,000 spaces then a letter: a
+  // minute); trimEnd takes off the same characters in one pass.
+  const body = code.replace(/^\n+/, "").trimEnd();
   const ticks = /```/.test(body) ? "````" : "```";
   return `${ticks}${lang}\n${body}\n${ticks}`;
 }

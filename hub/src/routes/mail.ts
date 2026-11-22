@@ -11,6 +11,10 @@ import { addCustomBundle, bundleContext, customBundles, deleteCustomBundle, upda
  */
 export function mailRoutes() {
   const r = new Hono<{ Variables: { hub: Hub } }>();
+  // Mail is kept on the hub only: no device, browser or proxy may store an answer. (The Apple apps used to write every
+  // answer, mail included, to their URL cache on disk.)
+  r.use("/mail/*", async (c, next) => { await next(); c.header("Cache-Control", "no-store"); });
+  r.use("/mail", async (c, next) => { await next(); c.header("Cache-Control", "no-store"); });
 
   r.get("/mail", (c) => {
     const hub = c.get("hub");

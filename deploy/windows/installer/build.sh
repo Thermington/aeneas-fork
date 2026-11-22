@@ -10,6 +10,10 @@
 #
 # The installer carries deploy/install.ps1 as it is at this checkout; that script installs the hub from the public
 # repository's main branch.
+#
+# Built here, the installer does not carry Microsoft's Visual C++ runtime installer: checking its Authenticode
+# signature needs Windows, so only build.ps1 carries it: build the released installer with build.ps1.
+# On a PC without the runtime, install.ps1 then downloads it from Microsoft and runs it only when Microsoft signed it.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -25,4 +29,5 @@ command -v makensis >/dev/null || { echo "makensis is needed: apt-get install ns
 makensis -V2 -DVERSION="$VERSION" -DOUTDIR="$OUT" "$HERE/aeneas-hub.nsi"
 EXE="$OUT/Aeneas-Hub-Setup-$VERSION.exe"
 ( cd "$OUT" && shasum -a 256 "$(basename "$EXE")" > "$(basename "$EXE").sha256" )
+echo "note: built without the Visual C++ runtime installer inside (build.ps1 on Windows carries it); a PC without the runtime downloads it from Microsoft during the install"
 echo "built $EXE ($(du -h "$EXE" | cut -f1)), sha256 $(cut -d' ' -f1 "$EXE.sha256")"

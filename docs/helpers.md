@@ -38,8 +38,12 @@ After **Yes, let Robin help** they are never asked again. Someone who is not tec
 they chose to trust their helper. What the helper can then do:
 
 - **Their computer.** The Aeneas app on their Windows computer or Mac runs the commands the helper's assistant sends,
-  while the app is open, unless they switch it off on that computer (Settings, People who help you, This computer). So
-  that it is open after a restart, turn on Start on login on that computer (Settings, Windows). Ask the assistant, for example "why is Mom's computer slow?": their computer is a
+  while the app is open, unless they switch it off on that computer (Settings, People who help you, This computer). On
+  a Windows computer the app turns on Start on login by itself the first time it finds someone helping (once they said
+  yes, on any of their devices), so it is open after a restart without them doing anything, and People who help you,
+  This computer says so in one line. It does this only for a helped person, never for other users of the Windows app,
+  and only once: turned off in Settings, Windows, Start on login, it stays off. Stop leaves it as it is (Aeneas keeps
+  starting when they sign in until they turn that off). On a Mac, turn on Start on login there by hand. Ask the assistant, for example "why is Mom's computer slow?": their computer is a
   machine like the helper's own (Machines). Commands that only look run at once; a change waits for the helper's own
   yes in the chat, as on the helper's own machines.
 - **The devices in their home.** In their app, Find the devices in my home lists the computers, printers, phones,

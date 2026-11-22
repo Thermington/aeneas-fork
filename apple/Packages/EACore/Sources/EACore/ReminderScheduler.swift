@@ -111,11 +111,13 @@ public struct AlertNotice: Equatable, Sendable {
     public var url: String?
 
     public static let opsURL = "everythingapp://section/ops"
+    /// New mail opens the Mail screen.
+    public static let mailURL = "everythingapp://section/mail"
 
     public init(_ n: NotifyEvent) {
         thread = n.kind
         incidentId = n.kind == "monitor" ? n.incident_id : nil
-        url = n.kind == "monitor" ? Self.opsURL : nil
+        url = n.kind == "monitor" ? Self.opsURL : n.kind == "mail" ? Self.mailURL : nil
         let name = Self.trimmed(n.name), state = Self.trimmed(n.state), error = Self.trimmed(n.error)
         if n.kind == "monitor" {
             let key = Self.monitorId(fromNotifyId: n.id) ?? (name.isEmpty ? UUID().uuidString.lowercased() : "name:" + name)

@@ -111,6 +111,9 @@ public enum AppModule: String, CaseIterable, Sendable {
     case appleCalendar = "apple_calendar"
     /// Calendar accounts: the hub keeps iCloud calendars in step with the app, both ways (since 2026-11-18).
     case calendars
+    /// Mail: the iCloud Inbox with bundles, Pin, Done and Snooze (since 2026-11-19). Off on a new hub, so the app shows
+    /// it only while the hub lists it as on (`isOnListed`), never while the switches are not known.
+    case mailInbox = "mail_inbox"
 
     /// The module an entity kind belongs to, nil for the core. Mirrors the hub's `kinds` in modules.ts.
     public static func of(kind: Kind) -> AppModule? {
@@ -136,6 +139,9 @@ extension Array where Element == ModuleInfo {
     /// Unknown or not loaded yet means on, so nothing disappears offline or before the hub first answers.
     public func isOn(_ id: String) -> Bool { first { $0.id == id }?.on ?? true }
     public func isOn(_ m: AppModule) -> Bool { isOn(m.rawValue) }
+    /// On only when the hub lists it and it is on: for a module that is off on a new hub (Mail), so an older hub that
+    /// has no such module, or switches not loaded yet, never show a screen the hub cannot answer.
+    public func isOnListed(_ m: AppModule) -> Bool { first { $0.id == m.rawValue }?.on ?? false }
 
     /// Grouped for Settings, groups and modules in the hub's order.
     public var grouped: [ModuleGroup] {

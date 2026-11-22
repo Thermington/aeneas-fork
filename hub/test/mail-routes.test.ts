@@ -248,3 +248,14 @@ test("mail routes: a refused password shows on the mailbox, without the server's
     assert.ok(!l.mailboxes[0].last_error!.includes("Authentication failed"), "the hub's words, not the server's");
   } finally { done(t); }
 });
+
+test("mail routes: no answer may be stored by a device, browser or proxy", async () => {
+  const t = makeHub();
+  try {
+    t.hub.modules.set({ mail_inbox: true });
+    for (const p of ["/mail", "/mail/messages/nope", "/mail/settings/notify"]) {
+      const res = await t.api(p);
+      assert.equal(res.headers.get("cache-control"), "no-store", p);
+    }
+  } finally { t.cleanup(); }
+});

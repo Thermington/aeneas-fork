@@ -33,7 +33,10 @@ struct ConnectionsSettingsView: View {
                 Text("Set up the hub connection first.").foregroundStyle(.secondary)
             } else if let c {
                 if let g = c.google { gmail(g) }
-                if model.isOn(.mail), let i = c.icloud { icloudMail(i, reading: c.google?.reading == true, times: c.google?.times) }
+                // One link serves Mail receipts and the Mail screen, whichever are on (the hub answers while either is).
+                if model.isOn(.mail) || model.modules.isOnListed(.mailInbox), let i = c.icloud {
+                    icloudMail(i, reading: c.google?.reading == true, times: c.google?.times, receipts: model.isOn(.mail), inbox: model.modules.isOnListed(.mailInbox))
+                }
                 // Calendar accounts: the hub keeps iCloud calendars in step itself (hub calendar-sync.ts).
                 if model.isOn(.calendars) { ICloudCalendarSection(mailAddresses: c.icloud?.accounts.map(\.email) ?? []) }
                 // Each link feeds one module; while that module is off its link is hidden and the hub pauses its sync.
@@ -167,13 +170,15 @@ struct ConnectionsSettingsView: View {
 
     /// iCloud Mail, read-only: each mailbox linked with an app-specific password made at account.apple.com, through the
     /// hub's guide (the password goes only to the hub's own route and is never shown again).
-    @ViewBuilder private func icloudMail(_ i: Connections.ICloud, reading: Bool, times: [String]?) -> some View {
+    @ViewBuilder private func icloudMail(_ i: Connections.ICloud, reading: Bool, times: [String]?, receipts: Bool, inbox: Bool) -> some View {
         SwiftUI.Section {
             ForEach(i.accounts) { a in
                 VStack(alignment: .leading, spacing: 3) {
                     Text(a.email).font(.body.weight(.semibold))
-                    Text(a.summary).font(.footnote)
-                    Text("Last checked \(when(a.last_sync))").font(.caption).foregroundStyle(.secondary)
+                    if receipts {
+                        Text(a.summary).font(.footnote)
+                        Text("Last checked \(when(a.last_sync))").font(.caption).foregroundStyle(.secondary)
+                    }
                     if let e = a.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.dangerText) }
                     Button("Unlink", role: .destructive) { unlinkICloud = a.email }
                         .disabled(busy != nil)
@@ -183,9 +188,9 @@ struct ConnectionsSettingsView: View {
             .confirmationDialog("Unlink \(unlinkICloud ?? "")?", isPresented: Binding(get: { unlinkICloud != nil }, set: { if !$0 { unlinkICloud = nil } }), titleVisibility: .visible, presenting: unlinkICloud) { email in
                 Button("Unlink", role: .destructive) { run("icloud") { try await $0.disconnectICloud(email: email) } }
             } message: { _ in
-                Text("The hub deletes this mailbox's app-specific password. What was filed from its mail stays. To end the password itself, revoke it at account.apple.com.")
+                Text("The hub deletes this mailbox's app-specific password, and its mail on the Mail screen. What was filed from its mail stays. To end the password itself, revoke it at account.apple.com.")
             }
-            if !i.accounts.isEmpty {
+            if !i.accounts.isEmpty && receipts {
                 Button(reading ? "Reading the waiting mail" : i.waiting > 0 ? "Read now (\(i.waiting) waiting)" : "Read now") { run("icloud-read") { _ = try await $0.icloudReadNow(); return "Reading the waiting mail now. It stops for any chat." } }
                     .disabled(busy != nil)
                 note("icloud-read")
@@ -197,7 +202,9 @@ struct ConnectionsSettingsView: View {
         } footer: {
             Text(i.accounts.isEmpty
                  ? "Apple has no sign-in for mail, so the guide has you make an app-specific password at account.apple.com, in about 5 minutes. It is kept on your hub only and never shown again."
-                 : "Receipts, renewal notices and vet mail fill in Renewals and \(PetView.pet), read \(Self.readTimes(times)) like Gmail's when no game is using the GPU. The hub only reads: folders are opened read-only, nothing is marked read, moved or deleted, Junk, Trash, Drafts and Sent are skipped, and the mail itself is never kept.")
+                 : [inbox ? "Mail shows this mailbox's Inbox, sorted into bundles. Opening a mail marks it read in iCloud too; Done moves it to Archive there, and Undo moves it back. Each message is kept on the hub while it is in your Inbox, never its attachments." : nil,
+                    receipts ? "Receipts, renewal notices and vet mail fill in Renewals and \(PetView.pet), read \(Self.readTimes(times)) like Gmail's when no game is using the GPU. For these the hub only reads: folders are opened read-only, nothing is marked read, moved or deleted, Junk, Trash, Drafts and Sent are skipped, and the mail itself is never kept." : nil]
+                    .compactMap { $0 }.joined(separator: "\n\n"))
         }
         .themedRow()
     }

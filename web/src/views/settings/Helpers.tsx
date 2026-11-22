@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Helper, HelpersView } from "../../sync/api";
 import { engine } from "../../sync/engine";
 import { inSentence, sinceText, useHelpers, whenText } from "../../lib/helpersView";
-import { canBeHelperComputer, helperComputerOn, setHelperComputer } from "../../lib/helperAgent";
-import { isTauri, scanHomeNetwork } from "../../tauri/bridge";
+import { canBeHelperComputer, helpedAutostartDone, helperComputerOn, onHelpedAutostart, setHelperComputer } from "../../lib/helperAgent";
+import { helpedAutostartLine } from "../../lib/helpedAutostart";
+import { autostartEnabled, isTauri, scanHomeNetwork } from "../../tauri/bridge";
 import { HelperOfferCard } from "../../components/HelperOffer";
 import { SubPage, errorText } from "./common";
 
@@ -74,6 +75,13 @@ function HelperCard({ helper, onDone }: { helper: Helper; onDone: () => void }) 
 
 function ThisComputer({ who, view, onDone }: { who: string; view: HelpersView; onDone: () => void }) {
   const [on, setOn] = useState(helperComputerOn());
+  // Start on login, turned on for helping (lib/helpedAutostart.ts): said here while it is on.
+  const [startsAtSignIn, setStartsAtSignIn] = useState(false);
+  useEffect(() => {
+    const look = () => { if (helpedAutostartDone()) void autostartEnabled().then(setStartsAtSignIn).catch(() => setStartsAtSignIn(false)); };
+    look();
+    return onHelpedAutostart(look);
+  }, []);
   const listening = view.this_device?.agent?.listening ?? false;
   const set = async (next: boolean) => {
     setOn(next);
@@ -86,6 +94,7 @@ function ThisComputer({ who, view, onDone }: { who: string; view: HelpersView; o
       {on
         ? <p>{who} can check and fix this computer while Aeneas is open on it. {listening ? "It is ready now." : "It gets ready in a moment."}</p>
         : <p>{who} cannot use this computer now.</p>}
+      {on && startsAtSignIn && <p className="muted">{helpedAutostartLine(who)}</p>}
       <div className="choices">
         {on
           ? <button type="button" onClick={() => void set(false)}>Do not let {who} use this computer</button>

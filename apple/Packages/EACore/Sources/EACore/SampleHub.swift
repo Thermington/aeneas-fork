@@ -234,6 +234,8 @@ public final class RecordingTransport: HubTransport, @unchecked Sendable {
         if p == "sync/changes", query["since"] != "0", text.contains(#""changes":[]"#) { return r }
         // Chats are kept on the device in sample mode: a recorded list would hide the ones made there.
         if p == "ai/sessions" || p.hasPrefix("ai/sessions/") { return r }
+        // Mail is never written down on a device, a recording included.
+        if p == "mail" || p.hasPrefix("mail/") { return r }
         lock.withLock {
             kept.entries[SampleTransport.key(method: method, path: p, query: query, recordedDay: kept.day)] = .init(status: r.status, body: text)
             if let file, let data = try? JSONEncoder().encode(kept) { try? data.write(to: file, options: .atomic) }

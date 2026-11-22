@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeHub } from "./helpers.js";
-import { storageToMarkdown, attachmentsShown } from "../src/wiki-storage.js";
+import { storageToMarkdown, attachmentsShown, parseStorage, MAX_DEPTH } from "../src/wiki-storage.js";
+import { convert, syncConfluence } from "../src/imports/confluence.js";
 import { titleOf } from "../src/wiki.js";
 
 test("wiki: Confluence storage becomes readable markdown", () => {
@@ -201,4 +202,52 @@ test("wiki: Confluence links through Sign in with Atlassian, mirrors chosen spac
   } finally {
     t.cleanup();
   }
+});
+
+test("wiki: a Confluence page nested 100,000 deep is read to a depth of MAX_DEPTH, its deeper text kept in the element at the limit", () => {
+  // It overflowed the stack and failed the whole space's sync (2026-11-22).
+  for (const open of ["<p>", "<ac:x>", "<b>", "<ul><li>", "<table><tr><td>"]) {
+    const page = `${open.repeat(100_000)}deep words ${"<em>more</em>".repeat(3)}`;
+    const t0 = Date.now();
+    const md = storageToMarkdown(page);
+    assert.ok(Date.now() - t0 < 5000, `${open} took ${Date.now() - t0} ms`);
+    // Its text goes into the element at the limit, shown where that one shows text: a table row shows only its
+    // cells, so text that lands straight in a row is dropped.
+    if (!open.startsWith("<table>")) { assert.match(md, /deep words/, open); assert.match(md, /more/, open); }
+    assert.doesNotThrow(() => attachmentsShown(page));
+  }
+  let depth = 0;
+  for (let n = parseStorage("<p>".repeat(1000)); n.kids.length; n = n.kids[0] as typeof n) depth++;
+  assert.equal(depth, MAX_DEPTH);
+  // A page within the limit is read as before.
+  assert.equal(storageToMarkdown(`${"<div>".repeat(50)}<p>Hi <b>there</b></p>${"</div>".repeat(50)}`), "Hi **there**\n");
+});
+
+test("wiki: a Confluence page that cannot be converted is skipped; the rest of the space is mirrored", async () => {
+  const t = makeHub();
+  const real = convert.storageToMarkdown;
+  try {
+    t.hub.connections.update((c) => { c.atlassian = { access_token: "access-1", refresh_token: "refresh-1", expires_at: new Date(Date.now() + 3_600_000).toISOString(), cloud_id: "cloud-1", site_url: "https://example-studio.atlassian.net", site_name: "example-studio", spaces: ["STARFALL"] }; });
+    const page = (id: string, value: string) => ({ id, title: `Page ${id}`, parentId: null, position: 0, version: { number: 1 }, _links: { webui: `/spaces/STARFALL/pages/${id}` }, body: { storage: { value } } });
+    t.hub.fetch = (async (input: string | URL | Request) => {
+      const p = new URL(String(input)).pathname.replace("/ex/confluence/cloud-1/wiki", "");
+      const json = (j: unknown) => new Response(JSON.stringify(j));
+      if (p === "/api/v2/spaces") return json({ results: [{ id: "1", key: "STARFALL", name: "Starfall" }] });
+      if (p === "/api/v2/spaces/1/pages") return json({ results: [page("1", "<p>One</p>"), page("2", `${"<p>".repeat(100_000)}deep`), page("3", "<p>breaks</p>"), page("4", "<p>Four</p>")] });
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    convert.storageToMarkdown = (xhtml, id, key) => { if (id === "3") throw new RangeError("Maximum call stack size exceeded"); return real(xhtml, id, key); };
+    const r = await syncConfluence(t.hub);
+    assert.deepEqual(r, { spaces: 1, pages: 4, updated: 3, removed: 0, images: 0 });
+    const index = await (await t.api("/wiki")).json() as any;
+    assert.deepEqual(index.pages.filter((p: any) => p.source === "confluence").map((p: any) => p.title).sort(), ["Page 1", "Page 2", "Page 4"]);
+    const deep = await (await t.api("/wiki/page?id=confluence%3A2")).json() as any;
+    assert.match(deep.markdown, /deep/);
+    assert.match(t.hub.connections.get().atlassian!.last_error!, /STARFALL: page 3 could not be read and was skipped/);
+    // Once it can be read, the next sync takes it in.
+    convert.storageToMarkdown = real;
+    const again = await syncConfluence(t.hub);
+    assert.equal(again.updated, 1);
+    assert.equal(t.hub.connections.get().atlassian!.last_error, null);
+  } finally { convert.storageToMarkdown = real; t.cleanup(); }
 });

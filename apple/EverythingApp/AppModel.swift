@@ -21,7 +21,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
     // Body and home
     case health, logs, pet, food
     // Life admin
-    case lists, career, games, films, calc
+    case mail, lists, career, games, films, calc
     case settings
     var id: String { rawValue }
     var title: String {
@@ -58,6 +58,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         case .pet: return PetView.pet
         case .food: return "Food"
         case .sensors: return "Sensors"
+        case .mail: return "Mail"
         case .lists: return "Lists"
         case .career: return "Job applications"
         case .games: return "Games"
@@ -100,6 +101,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         case .pet: return "pawprint"
         case .food: return "fork.knife"
         case .sensors: return "thermometer.medium"
+        case .mail: return "envelope"
         case .lists: return "checkmark.square"
         case .career: return "briefcase"
         case .games: return "gamecontroller"
@@ -128,7 +130,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         LibraryArea(title: "Tech", sections: [.ops, .sensors]),
         LibraryArea(title: "Making", sections: [.projects, .wiki, .images, .procedures, .music, .quiz]),
         LibraryArea(title: "Body and home", sections: [.health, .logs, .pet, .food]),
-        LibraryArea(title: "Life admin", sections: [.lists, .games, .films, .calc]),
+        LibraryArea(title: "Life admin", sections: [.mail, .lists, .games, .films, .calc]),
     ]
     /// iPad and Mac: the tabs first, then the Library areas as sidebar groups.
     static let primary: [Section] = [.today, .assistant, .capture, .search]
@@ -166,6 +168,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         case .films: return .films
         case .calc: return .calc
         case .career: return .jobs
+        case .mail: return .mailInbox
         default: return nil
         }
     }
@@ -536,7 +539,13 @@ final class AppModel: ObservableObject {
 
     func isOn(_ m: AppModule) -> Bool { modules.isOn(m) }
     /// Whether a screen shows: core screens always, module screens while their module is on.
-    func shows(_ s: Section) -> Bool { s.module.map(isOn) ?? true }
+    func shows(_ s: Section) -> Bool {
+        // Mail is off on a new hub, and a hub from before it has no Mail to answer: it shows only while the hub lists
+        // it as on, never while the switches are not known yet. Sample mode has no mail to show (a recording never
+        // keeps mail), so it has no Mail screen.
+        if s == .mail { return !config.sampleMode && modules.isOnListed(.mailInbox) }
+        return s.module.map(isOn) ?? true
+    }
 
     /// The Library with screens of switched off modules left out (and Sensors while Machines is on), and areas with
     /// nothing left dropped.
