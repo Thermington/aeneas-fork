@@ -221,3 +221,32 @@ test("Direct link is offered only where its library has a build: not on an Intel
   assert.equal(directLinkRuns("linux", "ia32"), false);
   assert.equal(directLinkRuns("freebsd", "x64"), false);
 });
+
+test("Direct link: a library that cannot load says why plainly, and on Windows names the Visual C++ runtime", async () => {
+  const { directLoadFailure } = await import("../src/link.js");
+  // What iroh's loader throws on a Windows PC without vcruntime140.dll (its cause holds Windows' own words).
+  const napi = "Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.";
+  const win = directLoadFailure(napi, "win32");
+  assert.match(win ?? "", /Microsoft Visual C\+\+ runtime/);
+  assert.match(win ?? "", /Run the hub installer again/);
+  assert.doesNotMatch(win ?? "", /npm|package-lock/, "not npm's advice, which does not help");
+  assert.match(directLoadFailure("The specified module could not be found.\r\n\\\\?\\C:\\x\\iroh.win32-x64-msvc.node", "win32") ?? "", /Visual C\+\+/);
+  assert.equal(directLoadFailure(napi, "linux"), "Direct link cannot run on this system (Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.)");
+  assert.match(directLoadFailure("Cannot find module '@number0/iroh'", "darwin") ?? "", /^Direct link cannot run on this system/);
+  // A passing failure (no network yet) is not one of these: it is tried again.
+  assert.equal(directLoadFailure("failed to bind: address in use", "win32"), null);
+});
+
+test("Direct link: a library that cannot load is not tried again, and the status says what to do", async () => {
+  const t = makeHub();
+  const link = new DirectLink(t.hub.cfg, t.app.fetch, async () => { throw new Error("Cannot find native binding. npm has a bug"); }, { noRelay: true, retryMs: [10] });
+  try {
+    const s = await link.start();
+    assert.equal(s.state, "error");
+    assert.ok(s.error && s.error.length > 0);
+    assert.equal(s.retry_at, undefined, "no retry: it cannot load until something on the computer changes");
+  } finally {
+    await link.stop();
+    t.cleanup();
+  }
+});

@@ -23,6 +23,9 @@ import EACore
 ///                                choosing it in Settings does; with -EAAppearance light or dark, Classic's appearance
 ///   -EAThemeEditor YES           with -EASettingsPage appColors, the theme editor opens on the theme in use
 ///   -EAOpenItem <id>             an item's sheet opens, as a link to it does
+///   -EAMailPlace <place>         with -EASection mail: inbox, snoozed, done or bundle:<id> (MailView.debugLaunch)
+///   -EAMailOpen <words>          with -EASection mail, the first thread whose subject has the words opens
+///   -EAMailSelect <n>            with -EASection mail, the first n mail rows are selected
 @MainActor
 enum DebugHooks {
     /// The machine page `-EAMachine` asked for opens once, not again each time the Overview shows.

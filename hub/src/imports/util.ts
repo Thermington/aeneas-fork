@@ -27,3 +27,26 @@ export async function fetchWithTimeout(f: typeof fetch, url: string, service: st
     throw new StoreError(502, `${service} could not be reached: ${(e as Error).message}`);
   }
 }
+
+/**
+ * A response's text, at most `max` bytes: refused with a 502 naming the service as soon as it says it is larger, or
+ * turns out to be while it is read, and the rest is not read (as fetchPublicBytes in ai/web.ts and the Tor fetch stop
+ * at their cap). Decoded as `Response.text()` decodes.
+ */
+export async function textCapped(r: Response, max: number, service: string): Promise<string> {
+  const tooBig = () => new StoreError(502, `${service} sent more than the hub reads (${Math.round(max / 1_000_000)} MB)`);
+  const said = Number(r.headers.get("content-length"));
+  if (Number.isFinite(said) && said > max) { await r.body?.cancel().catch(() => {}); throw tooBig(); }
+  if (!r.body) return "";
+  const reader = r.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { await reader.cancel().catch(() => {}); throw tooBig(); }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}

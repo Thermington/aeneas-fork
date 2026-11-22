@@ -227,3 +227,12 @@ test("calendar ics: an edit keeps the event's time zone and other parts; wall ti
   const e = { title: "Trip", start: "2026-11-20", end: "2026-11-22", all_day: true } as Entity["fields"];
   assert.deepEqual(snapOf(e), { title: "Trip", start: "2026-11-20T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z", all_day: true });
 });
+
+test("calendar ics: an object that is no event, or several, is passed over instead of stopping the sync", () => {
+  const f = { title: "Call", start: "2026-11-03T15:00:00.000Z", end: "2026-11-03T16:00:00.000Z", all_day: false };
+  // ical.js reads these without a complaint, as nothing or as two calendars; reading on from there threw.
+  for (const data of ["", "\r\n", "\r\n \r\n", "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\nBEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", "X:1\r\n"]) {
+    assert.equal(parseObject(data, new Date("2026-01-01"), new Date("2027-01-01")), null, JSON.stringify(data));
+    assert.equal(updatedEventIcs(data, f), null, JSON.stringify(data));
+  }
+});

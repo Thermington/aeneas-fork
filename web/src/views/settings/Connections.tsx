@@ -444,7 +444,7 @@ function ICloudMail({ c, receipts, chat, reading, reload }: { c: ICloudConnectio
       ))}
       {c.accounts.length > 0 && chat && (
         <div className="muted small">
-          <a href="#/mail">Mail</a> shows this mailbox's Inbox, sorted into bundles. Nothing is marked read; Done moves a mail to Archive in iCloud, and Undo moves it back. Each message is kept on the hub while it is in your Inbox, never its attachments.
+          <a href="#/mail">Mail</a> shows this mailbox's Inbox, sorted into bundles. Read and unread are kept the same as in iCloud; Done moves a mail to Archive in iCloud, and Undo moves it back. Each message is kept on the hub while it is in your Inbox, never its attachments.
         </div>
       )}
       {c.accounts.length > 0 && receipts && (

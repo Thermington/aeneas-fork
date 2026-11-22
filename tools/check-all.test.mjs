@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
 import { stepEnv, workflowSteps } from "./check-all.mjs";
 
 const workflow = (file) => readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
@@ -28,6 +28,19 @@ test("values nested under a step (with:, env:) are not taken for the step's own"
 
 
 test("a check never runs with git's hook variables, which name the repository being pushed", () => {
-  const env = stepEnv({ PATH: "/usr/bin", HOME: "/home/x", GIT_DIR: "/repo/.git/worktrees/side", GIT_WORK_TREE: "/side", GIT_INDEX_FILE: "index", GIT_PREFIX: "hub/", GIT_AUTHOR_NAME: "kept" });
+  const env = stepEnv({ PATH: "/usr/bin", HOME: "/home/x", GIT_DIR: "/repo/.git/worktrees/side", GIT_WORK_TREE: "/side", GIT_INDEX_FILE: "index", GIT_PREFIX: "hub/", GIT_AUTHOR_NAME: "kept" }, null);
   assert.deepEqual(env, { PATH: "/usr/bin", HOME: "/home/x", GIT_AUTHOR_NAME: "kept", CI: "1" });
+});
+
+test("on a Mac the selected Xcode is named for every check, unless the caller named one", () => {
+  assert.equal(stepEnv({ PATH: "/usr/bin" }, "/Applications/Xcode.app/Contents/Developer").DEVELOPER_DIR, "/Applications/Xcode.app/Contents/Developer");
+  assert.equal(stepEnv({ PATH: "/usr/bin", DEVELOPER_DIR: "/mine" }, "/Applications/Xcode.app/Contents/Developer").DEVELOPER_DIR, "/mine");
+  assert.equal(stepEnv({ PATH: "/usr/bin" }, null).DEVELOPER_DIR, undefined);
+});
+
+test("the SDK git's own shim hands a hook is replaced by the selected Xcode's; one the caller chose is kept", () => {
+  const xcode = "/Applications/Xcode_26.6_RC.app/Contents/Developer";
+  if (!fs.existsSync(`${xcode}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`)) return;
+  assert.equal(stepEnv({ SDKROOT: "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" }, xcode).SDKROOT, `${xcode}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`);
+  assert.equal(stepEnv({ SDKROOT: "/my/sdk" }, xcode).SDKROOT, "/my/sdk");
 });

@@ -1,6 +1,7 @@
 import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
-import { fetchWithTimeout, norm, stableId } from "./util.js";
+import { withoutTags } from "./mail-text.js";
+import { fetchWithTimeout, norm, stableId, textCapped } from "./util.js";
 
 /**
  * Letterboxd has no open API: films come from the member's public diary feed (letterboxd.com/<user>/rss/, about the
@@ -108,24 +109,65 @@ export function upsertFilms(hub: Hub, films: FilmInput[]): { created: number; up
 
 // ---------- diary feed ----------
 
+// The feed is read in one pass for each step. As patterns (`<!\[CDATA\[([\s\S]*?)\]\]>`, `<item>([\s\S]*?)<\/item>`,
+// `<p>([\s\S]*?)<\/p>`, `<[^>]+>` and `<name[^>]*>…</name>`) each searched to the end again from every opening that
+// was never closed: 600,000 characters of `<item>` or `<p>` held the hub for 10 to 21 seconds (2026-11-22). They give
+// what the patterns gave (test/feeds-hostile.test.ts).
+
+/** Each `<![CDATA[…]]>` as what is inside it: `.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")`. */
+function withoutCdata(s: string): string {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const a = s.indexOf("<![CDATA[", at);
+    if (a < 0) break;
+    const b = s.indexOf("]]>", a + 9);
+    if (b < 0) break; // never closed: no later one is either
+    out += s.slice(at, a) + s.slice(a + 9, b);
+    at = b + 3;
+  }
+  return out + s.slice(at);
+}
+
+/** What is inside each `<open>…<close>` in turn: `s.matchAll(/<open>([\s\S]*?)<close>/g)`, both written plainly. */
+function between(s: string, open: string, close: string): string[] {
+  const out: string[] = [];
+  for (let at = 0; ;) {
+    const a = s.indexOf(open, at);
+    if (a < 0) break;
+    const b = s.indexOf(close, a + open.length);
+    if (b < 0) break;
+    out.push(s.slice(a + open.length, b));
+    at = b + close.length;
+  }
+  return out;
+}
+
 const decode = (s: string) =>
-  s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  withoutCdata(s).replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+/**
+ * The first `<name …>…</name>` in a block, decoded: what the pattern `<name[^>]*>([\s\S]*?)</name>` found. Only the
+ * first `<name` can match: a later one has the same next ">" or one further on, so no "</name>" after it either.
+ */
 const tag = (block: string, name: string) => {
-  const m = new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`).exec(block);
-  return m ? decode(m[1]).trim() : undefined;
+  const a = block.indexOf(`<${name}`);
+  if (a < 0) return undefined;
+  const g = block.indexOf(">", a + name.length + 1);
+  if (g < 0) return undefined;
+  const b = block.indexOf(`</${name}>`, g + 1);
+  return b < 0 ? undefined : decode(block.slice(g + 1, b)).trim();
 };
 
 /** Diary entries from the feed. List posts and other items without a film title are skipped. */
 export function filmsFromRss(xml: string): FilmInput[] {
   const out: FilmInput[] = [];
-  for (const m of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
-    const b = m[1];
+  for (const b of between(xml, "<item>", "</item>")) {
     const title = tag(b, "letterboxd:filmTitle");
     if (!title) continue;
     const day = tag(b, "letterboxd:watchedDate");
     // The description is the poster, then the review in paragraphs, or "Watched on <date>." when there is none.
     const html = tag(b, "description") ?? "";
-    const paras = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((p) => p[1].replace(/<[^>]+>/g, "").trim()).filter((t) => t && !/^Watched on /.test(t));
+    const paras = between(html, "<p>", "</p>").map((p) => withoutTags(p, "").trim()).filter((t) => t && !/^Watched on /.test(t));
     const tmdb = Number(tag(b, "tmdb:movieId"));
     out.push({
       title,
@@ -142,11 +184,14 @@ export function filmsFromRss(xml: string): FilmInput[] {
   return out;
 }
 
+/** The most of the feed the hub reads: about 50 diary entries are a few hundred KB; more is refused, never read on. */
+export const FEED_MAX = 2_000_000;
+
 async function fetchRss(hub: Hub, username: string): Promise<string> {
   const r = await fetchWithTimeout(hub.fetch, `https://letterboxd.com/${encodeURIComponent(username)}/rss/`, "Letterboxd", { headers: { "user-agent": "Aeneas/0.1 (personal diary sync)", accept: "application/rss+xml, application/xml" } });
   if (r.status === 404) throw new StoreError(422, `Letterboxd has no member called "${username}"`);
-  if (!r.ok) throw new StoreError(502, `Letterboxd answered ${r.status}`);
-  return r.text();
+  if (!r.ok) { await r.body?.cancel().catch(() => {}); throw new StoreError(502, `Letterboxd answered ${r.status}`); }
+  return textCapped(r, FEED_MAX, "Letterboxd");
 }
 
 export async function connectLetterboxd(hub: Hub, body: Record<string, unknown>) {

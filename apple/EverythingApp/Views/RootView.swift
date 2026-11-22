@@ -171,6 +171,7 @@ private func sectionContent(_ s: Section) -> some View {
     case .pet: PetView()
     case .food: FoodView()
     case .sensors: SensorsView()
+    case .mail: MailView()
     case .lists: ListsView()
     case .career: CareerView()
     case .games: GamesView()

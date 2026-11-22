@@ -168,6 +168,9 @@ export async function setAtlassianSpaces(hub: Hub, body: Record<string, unknown>
   return { connection: hub.connections.view().atlassian, sync };
 }
 
+/** The converter a sync uses: tests put in one that fails for a page. */
+export const convert = { storageToMarkdown };
+
 /** Read every mirrored space: changed pages are converted again, deleted ones leave, shown images are saved. */
 export async function syncConfluence(hub: Hub) {
   const result = { spaces: 0, pages: 0, updated: 0, removed: 0, images: 0 };
@@ -206,7 +209,14 @@ export async function syncConfluence(hub: Hub) {
           result.images += got.saved;
           if (got.failed) kept = `${rev}+images-missing`;
         }
-        upsert.push({ id, source: "confluence", source_key: sourceKey, title: String(pg.title ?? "Untitled"), path: `${key}/${pg.id}`, parent_id: parent, position, url, updated_at: pg.version?.createdAt ?? pg.createdAt ?? nowIso(), rev: kept, markdown: storageToMarkdown(storage, String(pg.id), key) });
+        // A page that cannot be converted is left as it was (its old version stays, and the next sync tries again);
+        // the rest of the space is mirrored all the same, and the owner is told which page.
+        let markdown: string;
+        try { markdown = convert.storageToMarkdown(storage, String(pg.id), key); } catch {
+          errors.push(`${key}: page ${String(pg.id).slice(0, 40)} could not be read and was skipped`);
+          continue;
+        }
+        upsert.push({ id, source: "confluence", source_key: sourceKey, title: String(pg.title ?? "Untitled"), path: `${key}/${pg.id}`, parent_id: parent, position, url, updated_at: pg.version?.createdAt ?? pg.createdAt ?? nowIso(), rev: kept, markdown });
       }
       const remove = [...existing.keys()].filter((id) => !seen.has(id));
       for (const id of remove) fs.rmSync(path.dirname(mediaPath(hub, id.split(":")[1], "x")), { recursive: true, force: true });

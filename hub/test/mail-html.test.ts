@@ -225,3 +225,11 @@ test("mail html: the list's first line shows link words, never addresses", () =>
   assert.equal(previewOf("Track it here (https://ship.example/t/1). Thanks"), "Track it here. Thanks");
   assert.equal(previewOf("Visit https://a.example/x or <https://b.example/y> now"), "Visit or now");
 });
+
+test("mail html: no srcset and no <source> reach the page, since Firefox fetches them past the page's own policy", () => {
+  // Checked 2026-11-22 in Firefox 157 (Playwright, headless): an <img srcset> and a <picture><source srcset> in a page
+  // whose Content-Security-Policy says img-src data: were still fetched from the server (WebKit fetched neither). The
+  // cleaner is the only wall that stops them, so they must never come out of it.
+  const { html } = cleanMailHtml(`<img src="https://img.example/a.png" srcset="https://img.example/b.png 2x" sizes="10px"><picture><source srcset="https://img.example/c.png" media="(min-width:1px)"><img src="https://img.example/d.png"></picture><video poster="https://img.example/e.png"><source src="https://img.example/f.mp4"></video>`);
+  assert.doesNotMatch(html, /srcset|<source|<picture|<video|poster|img\.example/i);
+});

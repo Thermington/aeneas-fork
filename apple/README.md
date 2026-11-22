@@ -57,7 +57,7 @@ Build settings that xcodegen normally fills from its preset bundle are written o
 
 From the prefix come the bundle ids (`<prefix>.everythingapp`, `.widgets`, `.share`, `.watchkitapp` and `.watchkitapp.watchwidgets`) and the app group `group.<prefix>.everythingapp`, which the app, the widgets, the share extension and the Watch share, and which is also the Keychain access group for the device key. The code reads the app group from each target's Info.plist (`EAAppGroup`), so nothing else names it.
 
-Signing is automatic. With no account signed in to Xcode, a device build fails with "No profiles for" a bundle id. `CODE_SIGNING_ALLOWED=NO` is only for simulator and local checks: an unsigned build cannot use the app group, so its store and settings fall back to the app's own container.
+Signing is automatic. With no account signed in to Xcode, a device build fails with "No profiles for" a bundle id. `CODE_SIGNING_ALLOWED=NO` is only for compiling and local checks: an unsigned build cannot use the app group, so its store and settings fall back to the app's own container, and it cannot pair (KeychainRefused). For a simulator that pairs, build with `CODE_SIGN_IDENTITY=-`.
 
 ## Sample mode
 
@@ -107,9 +107,10 @@ Keep DerivedData outside iCloud Drive (`-derivedDataPath`): this repository live
     xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath ~/Library/Caches/everythingapp-dd CODE_SIGNING_ALLOWED=NO build
     xcodebuild -project EverythingApp.xcodeproj -scheme 'EverythingApp Watch' -destination 'generic/platform=watchOS Simulator' -configuration Debug -derivedDataPath ~/Library/Caches/everythingapp-dd CODE_SIGNING_ALLOWED=NO build
 
-The UI tests also answer the "Open in Aeneas?" prompt iOS shows for scheme links opened from outside the app (which is why a bare `xcrun simctl openurl` stops at that prompt):
+The UI tests also answer the "Open in Aeneas?" prompt iOS shows for scheme links opened from outside the app (which is why a bare `xcrun simctl openurl` stops at that prompt). They need a locally signed build (`CODE_SIGN_IDENTITY=-`, which needs no Apple account): an unsigned one cannot keep the device key in the Keychain, so pairing fails with KeychainRefused. The pairing test runs only with a hub and a fresh code (`POST /devices/pairing`, 10 minutes), on a simulator that is not paired yet:
 
-    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath ~/Library/Caches/everythingapp-dd-test CODE_SIGNING_ALLOWED=NO -only-testing:EverythingAppUITests test
+    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath ~/Library/Caches/everythingapp-dd-test CODE_SIGN_IDENTITY=- -only-testing:EverythingAppUITests build-for-testing
+    TEST_RUNNER_EA_HUB=http://127.0.0.1:8790 TEST_RUNNER_EA_CODE=ABCD-EFGH xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath ~/Library/Caches/everythingapp-dd-test CODE_SIGN_IDENTITY=- -only-testing:EverythingAppUITests test-without-building
 
 iCloud Drive can leave copies named like `File 2.swift` after a branch switch, and they break the build. Delete such a copy when git does not track it and it is the same as its original.
 

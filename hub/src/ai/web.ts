@@ -3,6 +3,7 @@ import dns from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { nextMatch, withoutBlocks, withoutComments, withoutTags } from "../imports/mail-text.js";
 import { isPrivateHost } from "./hosts.js";
 
 /**
@@ -64,21 +65,105 @@ function decode(s: string): string {
   });
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// A page is read in one pass for each step. A page is hostile input (up to 3 MB), and the hub reads it on its one
+// thread: as patterns (`<!--[\s\S]*?-->`, `<(script|style)\b[\s\S]*?<\/\1>`, `<li\b[^>]*>`, `<[^>]+>` and the like)
+// each step searched to the end of the page again from every `<!--`, `<style`, `<li` or `<` that was never closed, so a
+// page of a few hundred thousand of them held the hub for minutes (2026-11-22). The steps below give the same text as
+// those patterns did (test/web-hostile.test.ts holds them, word for word, and checks), with the one-pass helpers mail
+// uses for the same reason (imports/mail-text.ts).
+
+/** Elements left out of a page with all that is inside them, to their own closing tag. */
+const PAGE_BLOCKS = ["script", "style", "noscript", "svg", "template", "iframe", "nav", "footer", "header", "form", "aside"];
+
+/** What is between the page's first `<title…>` and the `</title>` after it: `/<title[^>]*>([\s\S]*?)<\/title>/i`. */
+function titleOf(html: string): string {
+  const open = /<title/i.exec(html);
+  if (!open) return "";
+  // A later <title can only have the same ">" or one further on: when this one has no ">" and "</title>" after it,
+  // no later one has either.
+  const gt = html.indexOf(">", open.index + 6);
+  if (gt < 0) return "";
+  const close = /<\/title>/gi;
+  close.lastIndex = gt + 1;
+  const c = close.exec(html);
+  return c ? html.slice(gt + 1, c.index) : "";
+}
+
+/** `s` without its first `<head>` element, to the `</head>` after it: `.replace(/<head\b[\s\S]*?<\/head>/i, " ")`. */
+function withoutFirstHead(s: string): string {
+  const open = /<head\b/gi;
+  if (!open.exec(s)) return s;
+  const at = open.lastIndex - 5;
+  const close = /<\/head>/gi;
+  close.lastIndex = open.lastIndex;
+  return close.exec(s) ? `${s.slice(0, at)} ${s.slice(close.lastIndex)}` : s;
+}
+
+/** What is inside the page's first `<main>` or `<article>` that is closed: `/<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/i`. */
+function mainOf(s: string): string | null {
+  const open = /<(main|article)\b/gi;
+  const gt = nextMatch(s, />/g);
+  const closers: Record<string, (pos: number) => { at: number; end: number }> = { main: nextMatch(s, /<\/main>/gi), article: nextMatch(s, /<\/article>/gi) };
+  for (let m = open.exec(s); m; m = open.exec(s)) {
+    const g = gt(open.lastIndex);
+    if (g.at < 0) return null; // no ">" from here on: no later one has its tag closed either
+    const c = closers[m[1].toLowerCase()](g.end);
+    if (c.at < 0) continue; // never closed: the other name may still be
+    return s.slice(g.end, c.at);
+  }
+  return null;
+}
+
+/**
+ * `s` with each opening tag that starts as `open` (global, case-insensitive, ending where the attributes start) and runs
+ * to the next `>` replaced by `to(m)`: `.replace(/<li\b[^>]*>/gi, …)` with `open` /<li\b/gi.
+ */
+function openTagsReplaced(s: string, open: RegExp, to: (m: RegExpExecArray) => string): string {
+  const gt = nextMatch(s, />/g);
+  let out = "";
+  let at = 0;
+  open.lastIndex = 0;
+  for (let m = open.exec(s); m; m = open.exec(s)) {
+    const g = gt(open.lastIndex);
+    if (g.at < 0) break; // no ">" from here on: nothing after this is a tag
+    out += s.slice(at, m.index) + to(m);
+    at = g.end;
+    open.lastIndex = g.end;
+  }
+  return out + s.slice(at);
+}
+
+/** `s` with each `<pre…>…</pre>` written as a fenced code block of its text: `/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi`. */
+function presFenced(s: string): string {
+  const open = /<pre\b/gi;
+  const gt = nextMatch(s, />/g);
+  const close = nextMatch(s, /<\/pre>/gi);
+  let out = "";
+  let at = 0;
+  for (let m = open.exec(s); m; m = open.exec(s)) {
+    const g = gt(open.lastIndex);
+    if (g.at < 0) break;
+    const c = close(g.end);
+    if (c.at < 0) break; // no "</pre>" from here on: no later <pre> is closed either
+    out += `${s.slice(at, m.index)}\n\`\`\`\n${withoutTags(s.slice(g.end, c.at), "")}\n\`\`\`\n`;
+    at = c.end;
+    open.lastIndex = c.end;
+  }
+  return out + s.slice(at);
+}
+
 /** HTML to readable text: main content when the page marks it, block tags to line breaks, code kept. */
 export function htmlToText(html: string): { title: string; text: string } {
-  const title = decode((/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").replace(/\s+/g, " ").trim());
-  let body = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<head\b[\s\S]*?<\/head>/i, " ").replace(/<title\b[\s\S]*?<\/title>/gi, " ");
-  const main = /<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/i.exec(body);
-  if (main && main[2].length > 500) body = main[2];
-  body = body
-    .replace(/<(script|style|noscript|svg|template|iframe|nav|footer|header|form|aside)\b[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_m, inner: string) => `\n\`\`\`\n${inner.replace(/<[^>]+>/g, "")}\n\`\`\`\n`)
-    .replace(/<(br|hr)\s*\/?>/gi, "\n")
-    .replace(/<li\b[^>]*>/gi, "\n- ")
-    .replace(/<h([1-6])\b[^>]*>/gi, (_m, n: string) => `\n\n${"#".repeat(Number(n))} `)
-    .replace(/<\/(p|div|section|h[1-6]|li|tr|table|ul|ol|blockquote|dd|dt)>/gi, "\n")
-    .replace(/<t[dh]\b[^>]*>/gi, " | ")
-    .replace(/<[^>]+>/g, "");
+  const title = decode(titleOf(html).replace(/\s+/g, " ").trim());
+  let body = withoutBlocks(withoutFirstHead(withoutComments(html)), ["title"]);
+  const main = mainOf(body);
+  if (main !== null && main.length > 500) body = main;
+  body = presFenced(withoutBlocks(body, PAGE_BLOCKS)).replace(/<(br|hr)\s*\/?>/gi, "\n");
+  body = openTagsReplaced(body, /<li\b/gi, () => "\n- ");
+  body = openTagsReplaced(body, /<h([1-6])\b/gi, (m) => `\n\n${"#".repeat(Number(m[1]))} `);
+  body = body.replace(/<\/(p|div|section|h[1-6]|li|tr|table|ul|ol|blockquote|dd|dt)>/gi, "\n");
+  body = withoutTags(openTagsReplaced(body, /<t[dh]\b/gi, () => " | "), "");
   const text = decode(body)
     .split("\n").map((l) => l.replace(/[ \t ]+/g, " ").trim())
     .filter((l, i, a) => l || (a[i - 1] ?? "") !== "")

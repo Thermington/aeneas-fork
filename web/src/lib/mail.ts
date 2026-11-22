@@ -153,6 +153,43 @@ export function frameLink(href: string | null): string | null {
     return (u.protocol === "https:" || u.protocol === "http:") && u.hostname ? u.toString() : null;
   } catch { return null; }
 }
+/** A link element in a mail's page, as checkFrameLinks reads and changes it. */
+export interface FrameAnchor { getAttribute(name: string): string | null; setAttribute(name: string, value: string): void; removeAttribute(name: string): void }
+
+/**
+ * The links in a mail's page made fit for the browser to open by itself, done by the screen when the page has loaded:
+ * WebKit (Safari) runs no listener the screen puts in a frame sandboxed without scripts, so there a click is never
+ * the screen's to take, and the frame's `allow-popups` lets the browser open the link in a new tab instead (2026-11-22).
+ * A link keeps its address only when frameLink accepts it (http, https, mailto), written as frameLink gives it, opens
+ * in a new tab with no opener and no referrer, and shows that address when pointed at; any other link loses its
+ * address and opens nothing. `ping`, `download` and `referrerpolicy` go from every link.
+ */
+export function checkFrameLinks(links: Iterable<FrameAnchor>): void {
+  for (const a of links) {
+    const href = frameLink(a.getAttribute("href"));
+    for (const name of ["ping", "download", "referrerpolicy"]) a.removeAttribute(name);
+    if (!href) {
+      for (const name of ["href", "target", "rel", "title"]) a.removeAttribute(name);
+      continue;
+    }
+    a.setAttribute("href", href);
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+    a.setAttribute("title", href);
+  }
+}
+
+/**
+ * What a click inside a mail's page does: null when it is not the screen's to take (not on a link, or a button that
+ * opens nothing), else `open`, the link to open (frameLink), or null for a link that opens nothing; either way the page
+ * itself must not follow it. A middle click is taken too: it is an `auxclick`, not a `click`, and Firefox opened the
+ * mail's link in a new tab by itself, past frameLink, when the screen did not take it (2026-11-22).
+ */
+export function frameClick(e: { type: string; button: number; target: unknown }): { open: string | null } | null {
+  if (e.type === "auxclick" && e.button !== 1) return null;
+  const a = (e.target as { closest?: (sel: string) => { getAttribute(name: string): string | null } | null } | null)?.closest?.("a");
+  return a ? { open: frameLink(a.getAttribute("href")) } : null;
+}
 /** `more`: the last refresh left new mail for the next one (a big Inbox comes in batches). */
 export interface MailMailbox { email: string; last_refresh: string | null; last_error: string | null; more: boolean }
 /** What Done or Undo did: the mails moved, how many were not, and the hub's words when some were not. */

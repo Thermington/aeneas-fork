@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Helper } from "../sync/api";
 import { engine } from "../sync/engine";
 import { useHelpers } from "../lib/helpersView";
+import { wakeHelperAgent } from "../lib/helperAgent";
 import { errorText } from "../views/settings/common";
 
 /**
@@ -16,8 +17,11 @@ export function HelperOfferCard({ helper, onDone }: { helper: Helper; onDone?: (
     setBusy(true);
     setMsg("");
     try {
-      if (yes) await engine.client!.acceptHelper(helper.id);
-      else await engine.client!.stopHelper(helper.id);
+      if (yes) {
+        await engine.client!.acceptHelper(helper.id);
+        // On a Windows computer: its agent asks the hub at once, and turns on Start on login for helping.
+        wakeHelperAgent();
+      } else await engine.client!.stopHelper(helper.id);
       onDone?.();
     } catch (e) { setMsg(errorText(e)); } finally { setBusy(false); }
   };

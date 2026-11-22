@@ -81,16 +81,29 @@ export function legacyLicense(pkg) {
   return types.length ? (types.length === 1 ? types[0] : `(${types.join(" OR ")})`) : "";
 }
 
+/**
+ * Packages whose lock entry names no license (npm's older list form, which the lock file leaves out) and which may
+ * not be installed where the check runs (optional native parts that only build on some machines), each looked at by a
+ * person: name@version and its license. Without this the check passed or failed on what a given checkout had
+ * installed.
+ */
+const LOCK_LICENSES = new Map([
+  ["cpu-features@0.0.10", "MIT"], // optional part of ssh2; LICENSE file and package.json licenses list both MIT
+  ["buildcheck@0.0.7", "MIT"], // optional part of cpu-features; the same
+]);
+
 function npmPackages() {
   const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
   const out = [];
   for (const [key, v] of Object.entries(lock.packages ?? {})) {
     if (!key || !key.includes("node_modules/") || v.link) continue; // the root and this project's own workspaces
     let license = v.license ?? "";
+    const name = key.slice(key.lastIndexOf("node_modules/") + 13);
+    if (!license) license = LOCK_LICENSES.get(`${name}@${v.version ?? ""}`) ?? "";
     if (!license) {
       try { license = legacyLicense(JSON.parse(fs.readFileSync(path.join(ROOT, key, "package.json"), "utf8"))); } catch { /* not installed here */ }
     }
-    out.push({ name: key.slice(key.lastIndexOf("node_modules/") + 13), version: v.version ?? "", license });
+    out.push({ name, version: v.version ?? "", license });
   }
   return out;
 }

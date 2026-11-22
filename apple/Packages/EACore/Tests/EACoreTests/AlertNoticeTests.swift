@@ -27,7 +27,7 @@ final class AlertNoticeTests: XCTestCase {
         XCTAssertEqual(a.body, "The hub's disk is almost full: free up space")
         XCTAssertEqual(a.thread, "mail")
         XCTAssertNil(a.incidentId)
-        XCTAssertNil(a.url)
+        XCTAssertEqual(a.url, AlertNotice.mailURL, "a tap opens the Mail screen")
     }
 
     func testLaterAlertsForTheSameMonitorTakeTheEarlierOnesPlace() {

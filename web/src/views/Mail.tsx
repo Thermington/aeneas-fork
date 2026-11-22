@@ -16,7 +16,8 @@ import {
   deliveryAt,
   dueReminders,
   type DueReminder,
-  frameLink,
+  checkFrameLinks,
+  frameClick,
   inboxAt,
   inboxSections,
   initials,
@@ -1040,8 +1041,11 @@ const FRAME_MAX = 30_000;
 /**
  * The mail as sent, in a frame sandboxed without the permission to run scripts: nothing in it can run, whatever got past the hub's
  * cleaning, and its own policy (mail-html.ts on the hub) loads nothing. `allow-same-origin` only lets this screen's
- * code reach in to size the frame to the mail and take its link clicks: a link opens in the browser (http, https or
- * mailto only), never inside the frame, and shows its real address when pointed at.
+ * code reach in to size the frame to the mail, check its links and take their clicks: a link opens in the browser
+ * (http, https or mailto only), never inside the frame, and shows its real address when pointed at.
+ * `allow-popups allow-popups-to-escape-sandbox`: WebKit (Safari) runs none of this screen's listeners inside the frame,
+ * so there the browser opens a link itself, in a new tab with no opener and no referrer, once checkFrameLinks has kept
+ * only the links frameLink accepts (2026-11-22). Elsewhere the click is still the screen's, through openExternal.
  */
 function MailFrame({ doc, title, showQuote, onQuote }: { doc: string; title: string; showQuote: boolean; onQuote: (has: boolean) => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
@@ -1063,12 +1067,12 @@ function MailFrame({ doc, title, showQuote, onQuote }: { doc: string; title: str
     const frame = ref.current;
     if (!frame) return;
     let observer: ResizeObserver | null = null;
+    // A click, and a middle click (an auxclick), on a link: opened by the app when frameLink allows it, never by the page.
     const onClick = (e: MouseEvent) => {
-      const a = (e.target as Element | null)?.closest?.("a");
-      if (!a) return;
+      const c = frameClick(e);
+      if (!c) return;
       e.preventDefault();
-      const href = frameLink(a.getAttribute("href"));
-      if (href) void openExternal(href);
+      if (c.open) void openExternal(c.open);
     };
     const ready = () => {
       const d = frame.contentDocument;
@@ -1081,21 +1085,22 @@ function MailFrame({ doc, title, showQuote, onQuote }: { doc: string; title: str
         frame.style.height = "0px";
         frame.style.height = `${Math.min(Math.max(d.documentElement.scrollHeight, 60), FRAME_MAX)}px`;
       };
-      for (const a of d.querySelectorAll("a[href]")) a.setAttribute("title", a.getAttribute("href") ?? "");
+      checkFrameLinks(d.querySelectorAll("a[href], area[href]"));
       // Folded only when something is left to read: a forward (or any mail that is all quote) folded was a blank page.
       d.body?.classList.add("aeneas-fold");
       foldable.current = !!d.querySelector(QUOTE_SELECTOR) && !!d.body && (d.body.innerText.trim().length > 0 || !!d.body.querySelector("img"));
       onQuote(foldable.current);
       d.body?.classList.toggle("aeneas-fold", foldable.current && !unfold.current);
       d.addEventListener("click", onClick);
+      d.addEventListener("auxclick", onClick);
       observer = new ResizeObserver(fit);
       observer.observe(d.documentElement);
       fit();
     };
     frame.addEventListener("load", ready);
-    return () => { frame.removeEventListener("load", ready); observer?.disconnect(); frame.contentDocument?.removeEventListener("click", onClick); };
+    return () => { frame.removeEventListener("load", ready); observer?.disconnect(); frame.contentDocument?.removeEventListener("click", onClick); frame.contentDocument?.removeEventListener("auxclick", onClick); };
   }, [doc]);
-  return <iframe ref={ref} className="mailx-frame" title={title} sandbox="allow-same-origin" referrerPolicy="no-referrer" srcDoc={doc} />;
+  return <iframe ref={ref} className="mailx-frame" title={title} sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" srcDoc={doc} />;
 }
 
 function Empty({ title, text }: { title: string; text: string }) {

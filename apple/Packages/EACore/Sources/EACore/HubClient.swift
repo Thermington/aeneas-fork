@@ -70,10 +70,15 @@ public struct HTTPTransport: HubTransport {
     }
 
     /// 20 s without a byte from the hub ends a request (routes that wait longer set their own, see `timeout(path:)`).
+    /// No URL cache: the shared one wrote the hub's answers (mail on the Mail screen among them, which the hub marks
+    /// with no cache header) into a file in Caches, outside the protection the app gives its own files. The app keeps
+    /// what it needs itself.
     static func sessionConfiguration() -> URLSessionConfiguration {
         let c = URLSessionConfiguration.default
         c.timeoutIntervalForRequest = 20
         c.waitsForConnectivity = false
+        c.urlCache = nil
+        c.requestCachePolicy = .reloadIgnoringLocalCacheData
         return c
     }
 
@@ -139,7 +144,11 @@ public struct HTTPTransport: HubTransport {
     public static func timeout(path: String) -> TimeInterval? {
         // agent/jobs: a helped person's Mac waits up to 25 s for its helper's next command (Helpers.swift).
         // machines/setup: the hub gives the first sign-in 20 s, then adds its key and signs in again with it.
-        path == "ai/chat" ? 300 : path == "agent/jobs" ? 60 : path == "machines/setup" ? 90 : nil
+        // mail/refresh signs in to every mailbox and reads what is new; mail/done and mail/undo move up to 500 mails;
+        // a mail's pictures are fetched from its sender while the request waits.
+        if path == "mail/refresh" || (path.hasPrefix("mail/messages/") && path.hasSuffix("/pictures")) { return 120 }
+        if path == "mail/done" || path == "mail/undo" || path == "mail/seen" { return 60 }
+        return path == "ai/chat" ? 300 : path == "agent/jobs" ? 60 : path == "machines/setup" ? 90 : nil
     }
 
     /// Request bodies are JSON except a vault note (markdown) and an image shape (PNG).

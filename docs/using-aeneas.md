@@ -81,7 +81,8 @@ Mail is read on the hub, not on the devices: Settings, Connections, Gmail or iCl
 **Mail receipts.** The hub reads only mail that looks like receipts, renewal notices or vet mail, files them as
 renewals and pet visits, and does not keep the mail itself.
 
-**Mail** (the Mail screen, in the web, Windows and Android apps; iCloud Mail only). Your iCloud Inbox by day, with
+**Mail** (the Mail screen, in the web, Windows, Android, iPhone, iPad and Mac apps, not on the Apple Watch; iCloud Mail
+only). Your iCloud Inbox by day, with
 kinds of mail gathered into colored bundles: Purchases, Trips, Social, Promos and Other, and Bills, Pet and Jobs while
 those modules are on. A person's mail stands on its own.
 
@@ -102,6 +103,11 @@ those modules are on. A person's mail stands on its own.
   say the sender and subject, the sender only, or a count, as you choose on the Mail screen. Like every alert, they
   are switched off altogether in Settings, Notifications.
 - **Keys.** Arrow keys and single letters work on the Mail screen; the Keyboard keys button lists them.
+- **On the iPhone, iPad and Mac** the title is the menu of places (Inbox, Snoozed, Done, each bundle). Swipe a mail
+  for Done, Snooze, Pin and Mark read, or touch and hold it for the rest; Select (in the menu at the top right) picks
+  several. Pull the list down to refresh. A mail's page shows in a view where nothing in it runs or loads, and a
+  link in it opens in your browser. On the Mac the open mail shows beside the list, and an iPad or Mac keyboard has
+  the same letters as the web (Mailboxes and settings lists them).
 - The mail is kept on the hub only while it is in your Inbox (done mail for 30 days), never in a backup, and the
   assistant cannot read it. Switching the module off deletes it from the hub at once.
 - **Pictures in mail.** The hub fetches them through Tor when a mail arrives, so opening a mail loads nothing, and a

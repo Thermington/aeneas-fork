@@ -284,6 +284,22 @@ export function pageSummary(raw: string, opts: PageOptions & { urlName?: string 
   return { title: pageTitle(doc, opts.path), text, ...(media ? { media } : { media: null }) };
 }
 
+/**
+ * `s` without the spaces and tabs at the end of each line but the last: what `.replace(/[ \t]+\n/g, "\n")` gave, in one
+ * pass. The pattern tried every space of a long run again: an article of 600,000 characters of `<b> </b>` took five
+ * seconds, twice that many fourteen (2026-11-22).
+ */
+export function lineEndsTrimmed(s: string): string {
+  const lines = s.split("\n");
+  for (let i = 0; i < lines.length - 1; i++) {
+    const l = lines[i];
+    let e = l.length;
+    while (e > 0 && (l[e - 1] === " " || l[e - 1] === "\t")) e--;
+    if (e < l.length) lines[i] = l.slice(0, e);
+  }
+  return lines.join("\n");
+}
+
 export interface ArticleText { lead: string; sections: { id: string; level: number; title: string; text: string }[] }
 
 /**
@@ -297,7 +313,7 @@ export function articleText(html: string): ArticleText {
   let lead: string | null = null;
   let cur: { id: string; level: number; title: string } | null = null;
   const flush = () => {
-    const text = buf.join("").replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    const text = lineEndsTrimmed(buf.join("")).replace(/\n[ \t]+/g, "\n").replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
     if (cur) sections.push({ ...cur, text });
     else lead = text;
     buf = [];

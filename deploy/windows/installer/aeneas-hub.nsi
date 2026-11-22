@@ -6,9 +6,14 @@
 ; search, and Tailscale when the PC does not have it. Run again, it updates the hub. Settings, Apps, Aeneas hub
 ; uninstalls it and keeps the data and keys.
 ;
+; Built by build.ps1 (VCREDIST defined), it also carries Microsoft's Visual C++ runtime installer, checked there by
+; its signature; install.ps1 checks it again and runs it only on a PC without the runtime. Built without it (build.sh),
+; install.ps1 downloads that installer from Microsoft on such a PC, with the same check.
+;
 ; It runs as the user (not elevated): the hub, its data and its boot task belong to that user. The one step that
-; needs an administrator (registering the boot task, and installing Tailscale or a firewall rule for the home network
-; when those are chosen) asks Windows for permission itself.
+; needs an administrator (registering the boot task, installing the Visual C++ runtime when the PC lacks it, and
+; installing Tailscale or a firewall rule for the home network when those are chosen) asks Windows for permission
+; itself, once.
 
 Unicode true
 ManifestDPIAware true
@@ -233,6 +238,10 @@ FunctionEnd
 Section "Aeneas hub" SecHub
   SetOutPath "$PLUGINSDIR"
   File "${__FILEDIR__}\..\..\install.ps1"
+!ifdef VCREDIST
+  File "/oname=vc_redist.x64.exe" "${VCREDIST}"
+  System::Call 'Kernel32::SetEnvironmentVariable(t "EA_VC_REDIST", t "$PLUGINSDIR\vc_redist.x64.exe")i'
+!endif
   System::Call 'Kernel32::SetEnvironmentVariable(t "EA_INSTALLER", t "1")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "EA_MODELS_DIR", t "$ModelsDir")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "EA_ROOT", t "$INSTDIR")i'

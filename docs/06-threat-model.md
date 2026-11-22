@@ -95,6 +95,10 @@ Google, Atlassian, Steam, Letterboxd and the password managers.
 
 ### A poisoned dependency
 - Protected (Built): `package-lock.json` pins every npm package with its hash and installs use `npm ci`. The hub names 11 runtime packages and the web app 13 (each pulls in more); the Apple apps use no third-party packages. Licenses are checked by hand today.
+- Protected (Built): the Windows hub installer carries Microsoft's Visual C++ runtime installer for PCs without the
+  runtime. It is used only when its Authenticode signature is valid (unchanged, from a certificate Windows trusts) and
+  both the signer and its issuer are Microsoft Corporation, and the file says it is the x64 Redistributable 14: checked
+  at build time and again right before it runs as an administrator (`Test-VcRedistFile` in `deploy/install.ps1`).
 - Gaps: a bad update runs with the hub's full access: every record, every key, and SSH to the owner's machines. The user service the owner runs is not sandboxed the way the system unit is. Phase 5 adds a license and source check (cargo-deny for the Windows app's Rust crates) to the build.
 
 ### Content that carries instructions
@@ -114,7 +118,8 @@ their home devices with the passwords they saved for the helper.
   cut out of the output. SSH goes only to private addresses, and a device's key is kept from the first sign-in, so a
   stand-in device gets no password. Commands run as the person, without administrator rights.
 - Gaps: a helper hub taken over by someone else can do everything the helper can until the person presses Stop; the
-  log shows it afterwards, not before. The first SSH sign-in to a device trusts whatever key answers. The machine's admin
+  log shows it afterwards, not before. The person's Windows app turns on Start on login the first time they are helped,
+  so after a restart it answers the helper again without them opening it; it says so on People who help you. The first SSH sign-in to a device trusts whatever key answers. The machine's admin
   can read the person's files anyway, as for every person on the machine.
 
 ## Known gaps

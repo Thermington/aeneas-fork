@@ -203,6 +203,16 @@ A Windows hub (installed with `Aeneas-Hub-Setup.exe`, which runs `deploy/install
 | `models` (or the folder chosen during setup) | Ollama's models | No (downloaded again) |
 | `node`, `git`, `ollama`, `tor`, `python`, `searxng` | Programs the installer added (only the ones it needed) | No |
 
+The Direct link's library needs the Microsoft Visual C++ runtime (`vcruntime140.dll`, from the Visual C++ 2015-2022
+Redistributable, x64), which a clean Windows does not always have. The installer looks for it (the registry entry
+`HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64`, or the DLL in `System32`) and, when it is missing,
+installs it quietly under the same single permission prompt, from the copy it carries (signed by Microsoft, checked
+again before it runs). Without the installer (`install.ps1` alone) it downloads that file from Microsoft, with the same
+check. If it cannot install it, the hub still installs and the last lines say so: the Direct link stays off until the
+runtime is there (Settings, How devices reach this hub says the same). To fix it, install the Microsoft Visual C++
+Redistributable (x64) from Microsoft and run the installer again. A hub installed earlier gets it the next time
+the installer runs; updates from Settings, About do not ask for permission, so they do not install it.
+
 The scheduled task `\Aeneas\Aeneas hub` starts `app\deploy\windows\hub-service.ps1` at boot, as you, before anyone
 logs in. It runs the hub, Ollama, Tor and the search server (the ones listed in `config\services.json`), starts each again when it stops, and
 asks Windows not to sleep while the PC is on AC power.

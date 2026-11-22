@@ -218,7 +218,7 @@ const codePoint = (n: number): string => (Number.isInteger(n) && n >= 0 && n <= 
 // patterns did.
 
 /** Where `re` (global) next matches at or after a place, remembered between asks, which only move forward. */
-function nextMatch(s: string, re: RegExp): (pos: number) => { at: number; end: number } {
+export function nextMatch(s: string, re: RegExp): (pos: number) => { at: number; end: number } {
   let from = 0;
   let found: { at: number; end: number } | null = null;
   return (pos) => {
@@ -231,9 +231,12 @@ function nextMatch(s: string, re: RegExp): (pos: number) => { at: number; end: n
   };
 }
 
-/** `s` with a space for each `<head>`, `<style>`, `<script>` and `<title>` element, to its own closing tag. */
-export function withoutBlocks(s: string): string {
-  const open = /<(head|style|script|title)\b/gi;
+/**
+ * `s` with a space for each `<head>`, `<style>`, `<script>` and `<title>` element (or each element named in `names`,
+ * plain lowercase names), to its own closing tag: what `<(head|style|script|title)\b[\s\S]*?<\/\1>` (gi) gave.
+ */
+export function withoutBlocks(s: string, names: readonly string[] = ["head", "style", "script", "title"]): string {
+  const open = new RegExp(`<(${names.join("|")})\\b`, "gi");
   const closers = new Map<string, (pos: number) => { at: number; end: number }>();
   let out = "";
   let at = 0;

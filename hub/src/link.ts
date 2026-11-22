@@ -71,6 +71,20 @@ export function directLinkRuns(platform: string = process.platform, arch: string
 
 const DIRECT_CANNOT_RUN = "Direct link does not run on this computer: its library has no build for it (an Intel Mac, for one). Choose Home Wi-Fi only, or Tailscale to reach the hub away from home. To change it, run the hub installer again.";
 
+const DIRECT_NEEDS_VCRUNTIME = "This PC most likely does not have the Microsoft Visual C++ runtime, which the Direct link needs. Run the hub installer again, which installs it, or install the Microsoft Visual C++ Redistributable (x64) from Microsoft and restart the hub.";
+
+/**
+ * What the hub says when the Direct link's library cannot load, or null for a failure that passes (tried again later).
+ * On Windows the library is installed but needs the Microsoft Visual C++ runtime (vcruntime140.dll): without it Windows
+ * says "The specified module could not be found" and iroh's loader "Cannot find native binding", which read as an npm
+ * problem (a clean Windows 11, 2026-11). The hub installer installs the runtime when it is missing.
+ */
+export function directLoadFailure(msg: string, platform: string = process.platform): string | null {
+  if (!/Cannot find module|Cannot find native binding|not supported|ERR_DLOPEN|specified module could not be found/i.test(msg)) return null;
+  if (platform === "win32") return DIRECT_NEEDS_VCRUNTIME;
+  return `Direct link cannot run on this system (${msg.split("\n")[0]})`;
+}
+
 /** Whether this hub can offer each method as it is installed now, and what to do when it cannot. */
 export function linkAvailability(cfg: Config): Record<LinkMethod, { available: boolean; how?: string }> {
   const tailnet = /\.ts\.net(:\d+)?$/i.test(hostOf(cfg.publicUrl));
@@ -273,8 +287,8 @@ export class DirectLink {
       if (bound) await bound.close().catch(() => {});
       if (gen !== this.generation) return this.status();
       const msg = (e as Error).message ?? String(e);
-      const cannotRun = /Cannot find module|not supported|ERR_DLOPEN/i.test(msg);
-      this.status_ = { state: "error", error: cannotRun ? `Direct link cannot run on this system (${msg.split("\n")[0]})` : msg, relay_ok: false, connected: 0, direct: 0 };
+      const cannotRun = directLoadFailure(msg);
+      this.status_ = { state: "error", error: cannotRun ?? msg, relay_ok: false, connected: 0, direct: 0 };
       console.error(`[link] Direct link did not start: ${msg}`);
       if (!cannotRun) this.retryLater(gen);
     }

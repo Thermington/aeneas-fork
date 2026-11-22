@@ -56,9 +56,21 @@ const textOf = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : Str
  * One calendar object. Null when it holds no event the hub can use (no UID, no start, or not iCalendar). Repeating
  * events are expanded from `from` to `to`, moved and cancelled occurrences included.
  */
+/**
+ * One calendar object's text as a component, or null when it is not one: text ical.js cannot read, and also what it
+ * reads without a complaint but as no component or several (an empty or blank object, two VCALENDARs one after the
+ * other), which threw later and stopped the whole calendar sync for one odd event (2026-11-22).
+ */
+function componentOf(data: string): ICAL.Component | null {
+  try {
+    const jcal: unknown = ICAL.parse(data);
+    return Array.isArray(jcal) && typeof jcal[0] === "string" ? new ICAL.Component(jcal as unknown as ICAL.Component["jCal"]) : null;
+  } catch { return null; }
+}
+
 export function parseObject(data: string, from: Date, to: Date): ParsedObject | null {
-  let comp: ICAL.Component;
-  try { comp = new ICAL.Component(ICAL.parse(data)); } catch { return null; }
+  const comp = componentOf(data);
+  if (!comp) return null;
   registerZones(comp);
   const vevents = comp.getAllSubcomponents("vevent");
   const masterComp = vevents.find((v) => !v.hasProperty("recurrence-id")) ?? vevents[0];
@@ -138,8 +150,8 @@ export function newEventIcs(uid: string, f: EventTimes, now: Date = new Date()):
  * which the hub never writes) changes; its other properties stay. Null when the text is not an event.
  */
 export function updatedEventIcs(data: string, f: EventTimes, now: Date = new Date()): string | null {
-  let cal: ICAL.Component;
-  try { cal = new ICAL.Component(ICAL.parse(data)); } catch { return null; }
+  const cal = componentOf(data);
+  if (!cal) return null;
   const ev = cal.getAllSubcomponents("vevent").find((v) => !v.hasProperty("recurrence-id"));
   if (!ev) return null;
   const zoneOf = (name: string) => {

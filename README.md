@@ -86,7 +86,9 @@ build 26200, with an RTX 4090). What is different there:
   a new tailnet, and keeps Tailscale running while nobody is logged in. With Home Wi-Fi only, it makes the hub's own
   certificate and a firewall rule that lets only the hub's own program take connections, on private networks only.
 - Windows asks once for permission (an administrator) during the install, to start the hub at boot before anyone
-  logs in (and, when chosen, to install Tailscale or add that firewall rule). Said no to the boot task alone, the hub starts when you log in instead.
+  logs in (and, when chosen, to install Tailscale or add that firewall rule). Under the same prompt it installs
+  Microsoft's Visual C++ runtime when the PC lacks it: the Direct link needs it, and the installer carries Microsoft's
+  own signed copy. Said no to the boot task alone, the hub starts when you log in instead.
 - The hub asks Windows not to sleep while the PC is on AC power (the screen still turns off); a sleeping PC cannot
   answer your phone. Your phone keeps working offline and catches up when the hub is back.
 - The installer asks where to keep the models (1.5 to 19 GB each). Where they are only changes how fast a model loads
