@@ -241,8 +241,8 @@ This part matters most. Mail is hostile input.
 
 ### 9.2 A bundle
 
-- **The built-in bundles (renamed in the next PR):** Transactions, Trips, Updates and Promotions are always there
-  (ids `transactions`, `trips`, `updates`, `promotions`; before: Purchases, Social, Promos, and Other, now gone: a
+- **The built-in bundles (renamed in the next PR):** Transactions, Updates, Promotions and Trips are always there,
+  in that order (ids `transactions`, `updates`, `promotions`, `trips`; before: Purchases, Social, Promos, and Other, now gone: a
   notice nothing else claims is in Updates, and a reply in a mailing list's discussion stands alone). Bills (Renewals and bills),
   Pet and Jobs (Job search) show only while their module is on, each with "Sorted using your … records. Open … ›".
 - **The owner's own bundles** come after them, in one of 8 colors.

@@ -131,7 +131,7 @@ export function customBundleOf(mail: BundleMail, custom: CustomBundle[]): string
 }
 
 /** Every bundle's id, the built-in ones and the module ones. */
-export const BUNDLE_IDS = ["transactions", "trips", "updates", "promotions", "bills", "pet", "jobs"] as const;
+export const BUNDLE_IDS = ["transactions", "updates", "promotions", "trips", "bills", "pet", "jobs"] as const;
 /** Their names, as the screen shows them (for notifications). */
 export const BUNDLE_NAMES: Record<string, string> = { transactions: "Transactions", trips: "Trips", updates: "Updates", promotions: "Promotions", bills: "Bills", pet: "Pet", jobs: "Jobs" };
 /**

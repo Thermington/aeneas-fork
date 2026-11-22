@@ -386,9 +386,9 @@ export interface CustomBundle { id: string; name: string; color: number; address
 export const bundleClass = (b: Bundle) => (b.custom !== undefined ? `b-custom cc${b.custom}` : `b-${b.id}`);
 export const BUNDLES: Bundle[] = [
   { id: "transactions", name: "Transactions" },
-  { id: "trips", name: "Trips" },
   { id: "updates", name: "Updates" },
   { id: "promotions", name: "Promotions" },
+  { id: "trips", name: "Trips" },
   { id: "bills", name: "Bills", module: "renewals", moduleName: "Renewals and bills", screen: "/renewals" },
   { id: "pet", name: "Pet", module: "pet", moduleName: "Pet", screen: "/pet" },
   { id: "jobs", name: "Jobs", module: "jobs", moduleName: "Job search", screen: "/lists/jobs" },
