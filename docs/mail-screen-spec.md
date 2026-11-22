@@ -69,6 +69,9 @@ Reload the list after every action, and when the screen comes back to the front.
 - **Centering:** Refresh, search and Pinned only stay centered in the bar at every width. The two sides are equal, never
   narrower than what they hold, and the search box shrinks to keep them so. Up to 420px, Pinned only is a round pin
   button and New mail a round pencil.
+- **The bar's buttons (next PR)** look like the Pinned only switch's circle: Refresh (and the phone's magnifier) a white
+  circle, New mail a white pill, each in a see-through white ring with its icon and words in the bar's color; pointed
+  at, the ring turns whiter. On a phone New mail is the white circle alone.
 
 ---
 

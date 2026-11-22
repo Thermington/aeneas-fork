@@ -1010,9 +1010,7 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-bar-right { display: flex; justify-content: flex-end; min-width: 0; }
 .mailx-refresh { display: grid; place-items: center; width: 32px; height: 32px; min-height: 0; padding: 0; border-radius: 50%; flex: none; }
 /* The same height as the search box and the Pinned only switch. */
-.mailx-refresh .mailx-icon { width: 22px; height: 22px; }
-/* On the colored bar a button's own shade is the bar's color darkened, never lightened: white words and icons must read on it (as the search box). */
-.mailx-refresh:hover { background: rgb(0 0 0 / .2); }
+.mailx-refresh .mailx-icon { width: 18px; height: 18px; stroke-width: 2; }
 .mailx-refresh.busy .mailx-icon { animation: mailx-spin 1s linear infinite; }
 @keyframes mailx-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .mailx-refresh.busy .mailx-icon { animation: none; opacity: .6; } }
@@ -1023,6 +1021,18 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-bar.b-bills { --barc: var(--b-bills); } .mailx-bar.b-pet { --barc: var(--b-pet); } .mailx-bar.b-jobs { --barc: var(--b-jobs); }
 .mailx-bar h1 { margin: 0; font-size: 18px; white-space: nowrap; }
 .mailx-bar button { background: transparent; border: 0; color: inherit; min-height: 32px; padding: 4px 6px; }
+/*
+ * Refresh, New mail and (on phones) Search in the Pinned only switch's look (2026-11-22): a white circle, or for New
+ * mail a white pill, in a see-through white ring, its icon and words in the bar's color (which carries white at 4.5:1,
+ * so it reads on white as well). Pointed at, the ring turns as white as the switch's track does while on.
+ */
+.mailx-bar .mailx-refresh, .mailx-bar .mailx-compose-btn, .mailx-bar .mailx-search-btn {
+  background: #fff; background-clip: padding-box; border: 2px solid rgb(255 255 255 / .35); color: var(--barc);
+}
+.mailx-bar .mailx-refresh:hover, .mailx-bar .mailx-compose-btn:hover, .mailx-bar .mailx-compose-btn[aria-expanded="true"], .mailx-bar .mailx-search-btn:hover {
+  border-color: rgb(255 255 255 / .8);
+}
+.mailx-bar .mailx-refresh:disabled { opacity: 1; }
 .mailx-menu { display: none; }
 /*
  * The search box is the bar's color, darker (never lighter: white words must read on it whatever the bar's color is).
@@ -1243,10 +1253,8 @@ a.mailx-row { color: inherit; text-decoration: none; }
 .mailx-fact .what { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
 .mailx-fact button { flex: none; }
 /* Writing mail (drafts): New mail in the bar; the writing box on an open mail (Reply) or atop the list. */
-.mailx-compose-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 16px; background: rgb(0 0 0 / .2) !important; white-space: nowrap; }
-.mailx-compose-btn:hover { background: rgb(0 0 0 / .32) !important; }
-.mailx-compose-btn[aria-expanded="true"] { background: rgb(0 0 0 / .32) !important; }
-.mailx-compose-btn .mailx-icon { width: 16px; height: 16px; }
+.mailx-compose-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; min-height: 0; padding: 0 12px 0 8px; border-radius: 16px; font-weight: 600; white-space: nowrap; }
+.mailx-compose-btn .mailx-icon { width: 18px; height: 18px; stroke-width: 2; }
 .mailx-compose { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; padding-bottom: 12px; margin-bottom: 12px; background: var(--mail-item); border: 1px solid var(--border); border-radius: var(--radius); padding-right: 12px; }
 .mailx-main > .mailx-compose { padding-left: 12px; }
 .mailx-card .mailx-compose { margin: 8px 12px 8px 0; border-left: 3px solid var(--accent); }
@@ -1259,6 +1267,7 @@ a.mailx-row { color: inherit; text-decoration: none; }
 /* The phone layout: New mail is its pencil alone, a 36px circle like the bar's other buttons, never squeezed. */
 @media (max-width: 767px) {
   .mailx-compose-btn { width: 36px; height: 36px; padding: 0; border-radius: 50%; justify-content: center; flex: none; }
+  .mailx-bar .mailx-refresh { width: 36px; height: 36px; }
   .mailx-compose-btn span { display: none; }
 }
 /* A trip (the Trips bundle): one box, its pieces as a timeline down a band of the Trips color. */
