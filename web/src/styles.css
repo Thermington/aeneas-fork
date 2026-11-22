@@ -27,7 +27,7 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* Mail's bundle colors (Mail.tsx) as fills: white icons, initials and the words of the colored top bar sit on them,
      so white reads on each at 4.5:1 (web/src/lib/contrast.test.ts). */
-  --b-purchases: #2a7f50;
+  --b-transactions: #2a7f50;
   /*
    * The Mail screen: two shades, as grouped lists usually have: the page behind the list,
    * and the mail and bundles on it (white, as most mail is). Hover is an overlay on whatever is under it, never a shade.
@@ -37,26 +37,26 @@
   --mail-item: #ffffff;
   --mail-hover: rgb(0 0 0 / .05);
   --b-trips: #7048c0;
-  --b-social: #c9413f;
-  --b-promos: #4d7c0f;
+  --b-updates: #c9413f;
+  --b-promotions: #c2185b;
   --b-bills: #1f6f43;
   --b-pet: #b55d18;
   --b-jobs: #4352b8;
-  --b-other: #5d6470;
+  --b-folder: #5d6470;
   --b-inbox: #2f5fbf;
   --b-snoozed: #9e6910;
   --b-done: #358252;
   /* The same colors as words and icons (a bundle's name, its link, the side list's icons): each reads at 4.5:1 on the
      page, on a mail's row and on a row being pointed at. A theme moves them toward its own text color where it must
      (web/src/feel/appTheme.ts). */
-  --bt-purchases: #27764b;
+  --bt-transactions: #27764b;
   --bt-trips: #7048c0;
-  --bt-social: #be3735;
-  --bt-promos: #48740e;
+  --bt-updates: #be3735;
+  --bt-promotions: #b8185a;
   --bt-bills: #1f6f43;
   --bt-pet: #a25315;
   --bt-jobs: #4352b8;
-  --bt-other: #5d6470;
+  --bt-folder: #5d6470;
   --bt-inbox: #2f5fbf;
   --bt-snoozed: #8f5f0e;
   --bt-done: #30764b;
@@ -77,29 +77,29 @@
     --danger: #e07a73;
     --ok: #6cc08a;
     --warn: #e0a84a;
-    --b-purchases: #318256;
+    --b-transactions: #318256;
     --mail-page: #131417;
     --mail-item: #212328;
     --mail-hover: rgb(255 255 255 / .06);
     --b-trips: #7d5cc9;
-    --b-social: #c1514e;
-    --b-promos: #58801d;
+    --b-updates: #c1514e;
+    --b-promotions: #c42d6c;
     --b-bills: #2f7d52;
     --b-pet: #aa6229;
     --b-jobs: #5767c8;
-    --b-other: #6b7280;
+    --b-folder: #6b7280;
     --b-inbox: #33569e;
     --b-snoozed: #9a6a14;
     --b-done: #2f7a4b;
     /* The same colors as words and icons, lighter: on the dark page, a row and a row being pointed at. */
-    --bt-purchases: #40ab71;
+    --bt-transactions: #40ab71;
     --bt-trips: #a38cd9;
-    --bt-social: #d38280;
-    --bt-promos: #73a826;
+    --bt-updates: #d38280;
+    --bt-promotions: #e07aa6;
     --bt-bills: #40ab70;
     --bt-pet: #d38649;
     --bt-jobs: #8994d8;
-    --bt-other: #9399a5;
+    --bt-folder: #9399a5;
     --bt-inbox: #7b98d4;
     --bt-snoozed: #cc8c1a;
     --bt-done: #42ab69;
@@ -125,29 +125,29 @@
   --danger: #e07a73;
   --ok: #6cc08a;
   --warn: #e0a84a;
-  --b-purchases: #318256;
+  --b-transactions: #318256;
   --mail-page: #131417;
   --mail-item: #212328;
   --mail-hover: rgb(255 255 255 / .06);
   --b-trips: #7d5cc9;
-  --b-social: #c1514e;
-  --b-promos: #58801d;
+  --b-updates: #c1514e;
+  --b-promotions: #c42d6c;
   --b-bills: #2f7d52;
   --b-pet: #aa6229;
   --b-jobs: #5767c8;
-  --b-other: #6b7280;
+  --b-folder: #6b7280;
   --b-inbox: #33569e;
   --b-snoozed: #9a6a14;
   --b-done: #2f7a4b;
   /* The same colors as words and icons, lighter: on the dark page, a row and a row being pointed at. */
-  --bt-purchases: #40ab71;
+  --bt-transactions: #40ab71;
   --bt-trips: #a38cd9;
-  --bt-social: #d38280;
-  --bt-promos: #73a826;
+  --bt-updates: #d38280;
+  --bt-promotions: #e07aa6;
   --bt-bills: #40ab70;
   --bt-pet: #d38649;
   --bt-jobs: #8994d8;
-  --bt-other: #9399a5;
+  --bt-folder: #9399a5;
   --bt-inbox: #7b98d4;
   --bt-snoozed: #cc8c1a;
   --bt-done: #42ab69;
@@ -1019,8 +1019,8 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .mailx-refreshmsg { margin-bottom: 10px; }
 .mailx-bar.v-snoozed { --barc: var(--b-snoozed); }
 .mailx-bar.v-done { --barc: var(--b-done); }
-.mailx-bar.b-purchases { --barc: var(--b-purchases); } .mailx-bar.b-trips { --barc: var(--b-trips); } .mailx-bar.b-social { --barc: var(--b-social); } .mailx-bar.b-promos { --barc: var(--b-promos); }
-.mailx-bar.b-bills { --barc: var(--b-bills); } .mailx-bar.b-pet { --barc: var(--b-pet); } .mailx-bar.b-jobs { --barc: var(--b-jobs); } .mailx-bar.b-other { --barc: var(--b-other); }
+.mailx-bar.b-transactions { --barc: var(--b-transactions); } .mailx-bar.b-trips { --barc: var(--b-trips); } .mailx-bar.b-updates { --barc: var(--b-updates); } .mailx-bar.b-promotions { --barc: var(--b-promotions); }
+.mailx-bar.b-bills { --barc: var(--b-bills); } .mailx-bar.b-pet { --barc: var(--b-pet); } .mailx-bar.b-jobs { --barc: var(--b-jobs); }
 .mailx-bar h1 { margin: 0; font-size: 18px; white-space: nowrap; }
 .mailx-bar button { background: transparent; border: 0; color: inherit; min-height: 32px; padding: 4px 6px; }
 .mailx-menu { display: none; }
@@ -1219,20 +1219,19 @@ a.mailx-row { color: inherit; text-decoration: none; }
 @media (hover: none) { .mailx-acts { display: none !important; } }
 .chip { font-size: 12px; padding: 0 8px; border-radius: 10px; background: var(--surface-2); color: var(--muted); }
 /* Bundles: the icon on the bundle's color; open, a band of it down the side. */
-.mailx-bundle.b-purchases, .mailx-nav.b-purchases, .mailx-module.b-purchases, .mailx-av.b-purchases { --c: var(--b-purchases); --ct: var(--bt-purchases); }
+.mailx-bundle.b-transactions, .mailx-nav.b-transactions, .mailx-module.b-transactions, .mailx-av.b-transactions { --c: var(--b-transactions); --ct: var(--bt-transactions); }
 .mailx-bundle.b-trips, .mailx-nav.b-trips, .mailx-module.b-trips, .mailx-av.b-trips { --c: var(--b-trips); --ct: var(--bt-trips); }
-.mailx-bundle.b-social, .mailx-nav.b-social, .mailx-module.b-social, .mailx-av.b-social { --c: var(--b-social); --ct: var(--bt-social); }
-.mailx-bundle.b-promos, .mailx-nav.b-promos, .mailx-module.b-promos, .mailx-av.b-promos { --c: var(--b-promos); --ct: var(--bt-promos); }
+.mailx-bundle.b-updates, .mailx-nav.b-updates, .mailx-module.b-updates, .mailx-av.b-updates { --c: var(--b-updates); --ct: var(--bt-updates); }
+.mailx-bundle.b-promotions, .mailx-nav.b-promotions, .mailx-module.b-promotions, .mailx-av.b-promotions { --c: var(--b-promotions); --ct: var(--bt-promotions); }
 .mailx-bundle.b-bills, .mailx-nav.b-bills, .mailx-module.b-bills, .mailx-av.b-bills { --c: var(--b-bills); --ct: var(--bt-bills); }
 .mailx-bundle.b-pet, .mailx-nav.b-pet, .mailx-module.b-pet, .mailx-av.b-pet { --c: var(--b-pet); --ct: var(--bt-pet); }
 .mailx-bundle.b-jobs, .mailx-nav.b-jobs, .mailx-module.b-jobs, .mailx-av.b-jobs { --c: var(--b-jobs); --ct: var(--bt-jobs); }
-.mailx-bundle.b-other, .mailx-nav.b-other, .mailx-module.b-other, .mailx-av.b-other { --c: var(--b-other); --ct: var(--bt-other); }
 .mailx-av.bundle { background: var(--c); color: #fff; border-color: transparent; }
 /*
  * Cards: a mail's key facts (a package, a flight, a bill) in the color of the bundle they belong with. On a row, one
  * line under the subject with a small icon; on an open mail, a box of them above its body, each with Track or Open.
  */
-.mailx-cardline.b-purchases, .mailx-fact.b-purchases { --c: var(--b-purchases); --ct: var(--bt-purchases); }
+.mailx-cardline.b-transactions, .mailx-fact.b-transactions { --c: var(--b-transactions); --ct: var(--bt-transactions); }
 .mailx-cardline.b-trips, .mailx-fact.b-trips { --c: var(--b-trips); --ct: var(--bt-trips); }
 .mailx-cardline.b-bills, .mailx-fact.b-bills { --c: var(--b-bills); --ct: var(--bt-bills); }
 .mailx-cardline { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 2px; font-size: 13px; color: var(--ct); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1715,8 +1714,8 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .mailx-around textarea:focus { color: var(--text); border-style: solid; }
 .mailx-around-add { align-self: flex-start; }
 /* The other folders (Drafts, Sent, Spam, Trash, your own): Other's gray, as plain mail places, not a kind of mail. */
-.mailx-bar.v-folder { --barc: var(--b-other); }
-.mailx-nav.v-folder { --c: var(--b-other); --ct: var(--bt-other); }
+.mailx-bar.v-folder { --barc: var(--b-folder); }
+.mailx-nav.v-folder { --c: var(--b-folder); --ct: var(--bt-folder); }
 .mailx-folder-note { margin: 0 0 8px 4px; }
 .mailx-more { align-self: center; margin-top: 10px; }
 /* Move to: a small menu among an open mail's actions. */

@@ -1137,7 +1137,7 @@ function Row({ m, open, setOpen }: { m: MailThread; open: boolean; setOpen: (id:
 
 /**
  * A sender's circle: the brand's logo when iCloud verified it; for other mail a system sent, the sender's initials on
- * its bundle's color (TC for Trade Coffee on Purchases green); for a person, or mail in no bundle, initials on gray.
+ * its bundle's color (TC for Trade Coffee on Transactions green); for a person, or mail in no bundle, initials on gray.
  */
 function Avatar({ m }: { m: MailSummary }) {
   const { logos, shown } = useContext(Look);
@@ -1947,10 +1947,10 @@ const ICONS: Record<string, string> = {
   dot: "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z",
   pin: "M9 4h6l-1 6 3 3H7l3-3zM12 13v7",
   sun: "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
-  purchases: "M4 5h2l2 10h10l2-7H7M9 17.7a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6zM17 17.7a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6z",
+  transactions: "M4 8h15l-3.5-3.5M20 16H5l3.5 3.5",
   trips: "M10 18 8 21M3 13l7 1 6-8c1-1.3 3-1 3 .5L17 14l3 5-2 1-4-4-4 1z",
-  social: "M9 6a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM17 7.7a2.3 2.3 0 1 0 0 4.6a2.3 2.3 0 1 0 0-4.6zM3.5 19c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5M15 15c2.4-.4 4.6.8 5.5 3.5",
-  promos: "M4 4h7l9 9-7 7-9-9zM8.5 7.2a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6z",
+  updates: "M5 21V4h12l-2.5 4 2.5 4H5",
+  promotions: "M4 4h7l9 9-7 7-9-9zM8.5 7.2a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6z",
   bills: "M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3",
   pet: "M7 8.2a1.8 1.8 0 1 0 0 3.6a1.8 1.8 0 1 0 0-3.6zM11 4.7a1.8 1.8 0 1 0 0 3.6a1.8 1.8 0 1 0 0-3.6zM15.5 5.2a1.8 1.8 0 1 0 0 3.6a1.8 1.8 0 1 0 0-3.6zM18 9.2a1.8 1.8 0 1 0 0 3.6a1.8 1.8 0 1 0 0-3.6zM8.5 18c0-3 1.8-5.5 4-5.5s4 2.5 4 5.5c0 1.5-1.3 2-2.5 1.6l-1.5-.5-1.5.5C9.8 20 8.5 19.5 8.5 18z",
   jobs: "M5 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM9 7V5h6v2M3 12h18",

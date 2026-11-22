@@ -27,33 +27,33 @@ describe("mail screen rules", () => {
     const off = (id: string) => id !== "pet";
     expect(shownBundles(allOn).map((b) => b.id)).toEqual(BUNDLES.map((b) => b.id));
     expect(shownBundles(off).map((b) => b.id)).not.toContain("pet");
-    expect(shownBundles(off).map((b) => b.id)).toContain("promos");
+    expect(shownBundles(off).map((b) => b.id)).toContain("promotions");
     expect(bundleOf({ bundle: "pet" }, shownBundles(off))).toBeNull();
     expect(bundleOf({ bundle: "made-up" }, shownBundles(allOn))).toBeNull();
-    expect(bundleOf({ bundle: "promos" }, shownBundles(allOn))?.name).toBe("Promos");
+    expect(bundleOf({ bundle: "promotions" }, shownBundles(allOn))?.name).toBe("Promotions");
   });
 
   it("lists the Inbox newest first under day headings, a bundle as one row per day, pinned mail on its own", () => {
     const shown = shownBundles(allOn);
     const ms = [
       mail({ at: at(0, 10), subject: "Hike?" }),
-      mail({ at: at(0, 9), bundle: "purchases", from: { name: "Northwind", address: "o@northwind.example" } }),
-      mail({ at: at(0, 8), bundle: "purchases", from: { name: "Larkspur Books", address: "r@larkspur.example" } }),
-      mail({ at: at(0, 7), bundle: "purchases", pinned: true, subject: "Pinned receipt" }),
-      mail({ at: at(1), bundle: "purchases" }),
+      mail({ at: at(0, 9), bundle: "transactions", from: { name: "Northwind", address: "o@northwind.example" } }),
+      mail({ at: at(0, 8), bundle: "transactions", from: { name: "Larkspur Books", address: "r@larkspur.example" } }),
+      mail({ at: at(0, 7), bundle: "transactions", pinned: true, subject: "Pinned receipt" }),
+      mail({ at: at(1), bundle: "transactions" }),
       mail({ at: at(0, 6), state: "done", subject: "Done one" }),
       mail({ at: at(0, 5), state: "snoozed", subject: "Snoozed one" }),
     ];
     const s = inboxSections(ms, shown, { now: NOW });
     expect(s.map((x) => x.title)).toEqual(["Today", "Yesterday"]);
-    expect(s[0].rows.map((r) => (r.kind === "mail" ? r.mail.subject : `[${r.bundle.name} ${r.mails.length}]`))).toEqual(["Hike?", "[Purchases 2]", "Pinned receipt"]);
+    expect(s[0].rows.map((r) => (r.kind === "mail" ? r.mail.subject : `[${r.bundle.name} ${r.mails.length}]`))).toEqual(["Hike?", "[Transactions 2]", "Pinned receipt"]);
     const bundle = s[0].rows[1];
     expect(bundle.kind === "bundle" && sendersLine(bundle.mails)).toBe("Northwind, Larkspur Books");
     expect(s[1].rows.map((r) => r.kind)).toEqual(["bundle"]);
     expect(inboxSections(ms, shown, { now: NOW, pinnedOnly: true }).flatMap((x) => x.rows).map((r) => r.kind === "mail" && r.mail.subject)).toEqual(["Pinned receipt"]);
     expect(viewMessages(ms, "done", shown).map((m) => m.subject)).toEqual(["Done one"]);
     expect(viewMessages(ms, "snoozed", shown).map((m) => m.subject)).toEqual(["Snoozed one"]);
-    expect(viewMessages(ms, "b:purchases", shown)).toHaveLength(4);
+    expect(viewMessages(ms, "b:transactions", shown)).toHaveLength(4);
   });
 
   it("searches sender, subject and first words, every word", () => {
@@ -93,7 +93,7 @@ describe("mail screen rules", () => {
     const shown = shownBundles(allOn, [school]);
     expect(shown.map((b) => b.id)).toEqual([...BUNDLES.map((b) => b.id), "c-0123456789"]);
     expect(bundleClass(shown[shown.length - 1])).toBe("b-custom cc2");
-    expect(bundleClass(BUNDLES[0])).toBe("b-purchases");
+    expect(bundleClass(BUNDLES[0])).toBe("b-transactions");
     expect(bundleOf({ bundle: "c-0123456789" }, shown)?.name).toBe("School");
   });
 
@@ -137,7 +137,7 @@ describe("mail screen rules", () => {
     const g1 = mail({ thread: "t1", at: at(3), subject: "Gutters", seen: true, preview: "Saturday?" });
     const me = mail({ thread: "t1", at: at(2), subject: "Re: Gutters", mine: true, state: "sent", from: { name: "Robin", address: "robin@icloud.example" }, preview: "Yes, 10 AM." });
     const g2 = mail({ thread: "t1", at: at(1), subject: "Re: Gutters", seen: false, preview: "Bring the ladder." });
-    const shop = mail({ thread: "t2", at: at(0, 8), automated: true, bundle: "purchases", from: { name: "Northwind", address: "o@northwind.example" } });
+    const shop = mail({ thread: "t2", at: at(0, 8), automated: true, bundle: "transactions", from: { name: "Northwind", address: "o@northwind.example" } });
     const lonely = mail({ thread: "t3", mine: true, state: "sent" });
     const rows = threadRows([g1, me, g2, shop, lonely]);
     expect(rows).toHaveLength(2);
@@ -175,10 +175,10 @@ describe("mail screen rules", () => {
     expect(deliveryAt(arrived, { mode: "never" })).toBeNull();
     expect(deliveryAt(arrived, undefined)).toEqual(new Date(arrived));
 
-    const delivery = { promos: { mode: "daily" as const, time: "07:00" }, social: { mode: "never" as const } };
-    const promo = mail({ at: arrived, bundle: "promos", automated: true });
-    const pinned = mail({ at: arrived, bundle: "promos", automated: true, pinned: true });
-    const social = mail({ at: arrived, bundle: "social", automated: true });
+    const delivery = { promotions: { mode: "daily" as const, time: "07:00" }, updates: { mode: "never" as const } };
+    const promo = mail({ at: arrived, bundle: "promotions", automated: true });
+    const pinned = mail({ at: arrived, bundle: "promotions", automated: true, pinned: true });
+    const social = mail({ at: arrived, bundle: "updates", automated: true });
     const person = mail({ at: arrived });
     const thuNoon = new Date(2026, 10, 19, 12);
     expect(inboxAt(promo, delivery, thuNoon)).toBeNull();

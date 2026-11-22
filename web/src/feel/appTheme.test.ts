@@ -105,10 +105,10 @@ describe("the Mail screen in a theme", () => {
     for (const id of Object.keys(MAIL_WORDS.dark)) {
       for (const bg of [dusk.background, dusk.surface, pointedAt(dusk)]) expect(contrast(v[`--bt-${id}`], bg), `${id} on ${bg}`).toBeGreaterThanOrEqual(4.5);
     }
-    expect(v["--bt-purchases"]).not.toBe(MAIL_WORDS.dark.purchases);
+    expect(v["--bt-transactions"]).not.toBe(MAIL_WORDS.dark.transactions);
     // Midnight's page and cards are darker than Classic's: its colors stay as they are.
     const midnight = themeVars(APP_THEMES.find((a) => a.id === "midnight")!);
-    expect(midnight["--bt-purchases"]).toBe(MAIL_WORDS.dark.purchases);
+    expect(midnight["--bt-transactions"]).toBe(MAIL_WORDS.dark.transactions);
   });
 });
 

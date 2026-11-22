@@ -241,11 +241,14 @@ This part matters most. Mail is hostile input.
 
 ### 9.2 A bundle
 
-- **The built-in bundles:** Purchases, Trips, Social, Promos and Other are always there. Bills (Renewals and bills),
+- **The built-in bundles (renamed in the next PR):** Transactions, Trips, Updates and Promotions are always there
+  (ids `transactions`, `trips`, `updates`, `promotions`; before: Purchases, Social, Promos, and Other, now gone: a
+  notice nothing else claims is in Updates, and a reply in a mailing list's discussion stands alone). Bills (Renewals and bills),
   Pet and Jobs (Job search) show only while their module is on, each with "Sorted using your … records. Open … ›".
 - **The owner's own bundles** come after them, in one of 8 colors.
 - **Colors:** Inbox, Snoozed, Done and each bundle have a color that carries white words at 4.5:1, held by
-  `web/src/lib/contrast.test.ts`. Purchases, Promos and Bills are greens; Pet is orange.
+  `web/src/lib/contrast.test.ts`. Transactions and Bills are greens; Promotions is pink (fill `#c2185b`, dark `#c42d6c`;
+  words `#b8185a`, dark `#e07aa6`); Pet is orange. Folders keep Other's old gray.
 - **In a bundle:** the mail newest first, Sweep, **Show in Inbox** (9.3), **Notify me** (9.4), and **Edit bundle** for
   the owner's own.
 - **Trips (next PR):** in the Trips bundle, mail whose flight and stay cards follow each other within a day is one box

@@ -15,7 +15,7 @@ import { mailboxLabel } from "./mail-filer.js";
 import { errCode } from "./logsafe.js";
 import { mailDocument, pictureData, withImages } from "./mail-html.js";
 import { ownWords, quoteStart, withoutSignature } from "./imports/mail-text.js";
-import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, customBundles, NO_MODULES, type BundleContext } from "./mail-bundles.js";
+import { BUNDLE_IDS, BUNDLE_NAMES, bundleContext, bundleOf, currentBundleId, customBundles, NO_MODULES, OLD_BUNDLE_IDS, type BundleContext } from "./mail-bundles.js";
 import { fetchBytesViaTor, fetchPublicBytes, postOneClick, TorDown } from "./ai/web.js";
 import { StoreError } from "./store.js";
 import { textCards, type MailCard } from "./mail-cards.js";
@@ -109,6 +109,40 @@ CREATE TABLE IF NOT EXISTS folder_mail (
 CREATE INDEX IF NOT EXISTS folder_mail_at ON folder_mail(account, folder, at);
 `;
 
+/**
+ * The bundles' new ids (2026-11-22): settings kept under an old id move to its successor, and Other's are dropped (its
+ * mail is in Updates now, which keeps its own settings). Run at every start; once moved, there is nothing to do.
+ */
+function renameOldBundles(db: DB): void {
+  const read = (key: string) => (db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined)?.value;
+  const write = (key: string, value: unknown) => db.prepare("UPDATE settings SET value = ? WHERE key = ?").run(JSON.stringify(value), key);
+  const old = (id: string) => id in OLD_BUNDLE_IDS || id === "other";
+  try {
+    const d = read("bundle_delivery");
+    if (d) {
+      const all = JSON.parse(d) as Record<string, unknown>;
+      if (Object.keys(all).some(old)) {
+        const next: Record<string, unknown> = {};
+        for (const [id, v] of Object.entries(all)) {
+          const to = currentBundleId(id);
+          // Other goes; an old id gives way when its successor already has a setting of its own.
+          if (id === "other" || (to !== id && to in all)) continue;
+          next[to] = v;
+        }
+        write("bundle_delivery", next);
+      }
+    }
+    const n = read("mail_notify");
+    if (n) {
+      const notify = JSON.parse(n) as { bundles?: unknown };
+      if (Array.isArray(notify.bundles) && notify.bundles.some((b) => typeof b === "string" && old(b))) {
+        notify.bundles = [...new Set((notify.bundles as string[]).filter((b) => b !== "other").map(currentBundleId))];
+        write("mail_notify", notify);
+      }
+    }
+  } catch { /* a setting that does not read as JSON is left as it is; reading it answers the defaults */ }
+}
+
 export function openMailDb(dbPath: string): DB {
   if (dbPath !== ":memory:") fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
@@ -117,6 +151,7 @@ export function openMailDb(dbPath: string): DB {
   db.pragma("busy_timeout = 15000");
   db.pragma("secure_delete = ON");
   db.exec(SCHEMA);
+  renameOldBundles(db);
   // Since 1.0.10 (the first version shipped): read or unread, and threads. Columns are only added; the next refresh
   // reads each mail's read state, and fills in what kept mail answers (headers only), so pins, snoozes and done stay.
   const inboxCols = (db.prepare("PRAGMA table_info(inbox)").all() as { name: string }[]).map((c) => c.name);
@@ -568,7 +603,8 @@ export function bundleDelivery(db: DB): Record<string, BundleDelivery> {
 }
 
 /** Set one bundle's delivery (checked), and answer them all. */
-export function saveBundleDelivery(db: DB, bundle: string, body: Record<string, unknown>): Record<string, BundleDelivery> {
+export function saveBundleDelivery(db: DB, bundleAsSent: string, body: Record<string, unknown>): Record<string, BundleDelivery> {
+  const bundle = currentBundleId(bundleAsSent);
   if (!(BUNDLE_IDS as readonly string[]).includes(bundle) && !customBundles(db).some((b) => b.id === bundle)) throw new StoreError(404, "there is no such bundle");
   const mode = body.mode;
   if (mode !== "now" && mode !== "daily" && mode !== "weekly" && mode !== "never") throw new StoreError(422, "mode is now, daily, weekly or never");
@@ -609,6 +645,7 @@ export function saveMailNotify(db: DB, body: Record<string, unknown>): MailNotif
   if (body.detail !== undefined) { if (body.detail !== "full" && body.detail !== "sender" && body.detail !== "count") throw new StoreError(422, "detail is full, sender or count"); n.detail = body.detail; }
   if (body.bundle !== undefined) {
     if (typeof body.bundle !== "string" || typeof body.on !== "boolean") throw new StoreError(422, "bundle is a bundle's id, with on true or false");
+    body.bundle = currentBundleId(body.bundle);
     if (!(BUNDLE_IDS as readonly string[]).includes(body.bundle) && !customBundles(db).some((b) => b.id === body.bundle)) throw new StoreError(404, "there is no such bundle");
     n.bundles = body.on ? [...new Set([...n.bundles, body.bundle])] : n.bundles.filter((b) => b !== body.bundle);
   }

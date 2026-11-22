@@ -10,9 +10,11 @@ import type { ModuleId } from "./modules.js";
  * stale is stored. The sender, the subject and what the headers say are read; of the text, only its start, and only
  * for the job and order phrases (a recruiter's note and signature, a shop's "estimated arrival").
  *
- * Bundles: purchases, trips, social, promos and other for every mail a system sent; bills, pet and jobs only while
+ * Bundles: transactions, trips, updates and promotions for every mail a system sent; bills, pet and jobs only while
  * their module is on (their part of BundleContext is null when it is off). A person's own mail stands alone (null),
- * so it is never lost among notices.
+ * so it is never lost among notices, and so does a reply in a mailing list's discussion (people talking).
+ * Since 2026-11-22 Purchases is Transactions (money moving too), Social is Updates (every notice nothing else claims,
+ * as Other took before), Promos is Promotions, and there is no Other.
  *
  * The sender's name and the subject are whatever the sender wrote: a mail can put itself in the wrong bundle, nothing
  * more. The screen always shows the real address when a mail is opened.
@@ -129,9 +131,16 @@ export function customBundleOf(mail: BundleMail, custom: CustomBundle[]): string
 }
 
 /** Every bundle's id, the built-in ones and the module ones. */
-export const BUNDLE_IDS = ["purchases", "trips", "social", "promos", "bills", "pet", "jobs", "other"] as const;
+export const BUNDLE_IDS = ["transactions", "trips", "updates", "promotions", "bills", "pet", "jobs"] as const;
 /** Their names, as the screen shows them (for notifications). */
-export const BUNDLE_NAMES: Record<string, string> = { purchases: "Purchases", trips: "Trips", social: "Social", promos: "Promos", bills: "Bills", pet: "Pet", jobs: "Jobs", other: "Other" };
+export const BUNDLE_NAMES: Record<string, string> = { transactions: "Transactions", trips: "Trips", updates: "Updates", promotions: "Promotions", bills: "Bills", pet: "Pet", jobs: "Jobs" };
+/**
+ * The ids before 2026-11-22, and what they are now. A client that still sends an old id (an app not yet updated) is
+ * answered as if it sent the new one; Other has no successor.
+ */
+export const OLD_BUNDLE_IDS: Record<string, string> = { purchases: "transactions", social: "updates", promos: "promotions" };
+/** A bundle id as it is now: an old one's successor, else itself. */
+export const currentBundleId = (id: string): string => OLD_BUNDLE_IDS[id] ?? id;
 
 /** No modules on: only the bundles every mail can have. */
 export const NO_MODULES: BundleContext = { jobs: null, bills: null, pets: null };
@@ -204,7 +213,7 @@ function wordPattern(words: string[]): RegExp | null {
 const HIRING = ["greenhouse.io", "lever.co", "myworkday.com", "ashbyhq.com", "smartrecruiters.com", "icims.com"];
 /** Social networks' mail domains. */
 const SOCIAL = ["facebookmail.com", "linkedin.com", "instagram.com", "reddit.com", "redditmail.com", "discord.com", "nextdoor.com", "x.com"];
-/** Developer and work tools: their notices carry an unsubscribe link (to stop a repository's notices), but are not promos. */
+/** Developer and work tools: their notices carry an unsubscribe link (to stop a repository's notices), but are updates, not promotions. */
 const TOOLS = ["github.com", "gitlab.com", "bitbucket.org", "atlassian.net", "atlassian.com"];
 /** A reply's subject: "Re:" (and "Aw:", "Sv:"). */
 const REPLY = /^\s*(re|aw|sv)\s*:/i;
@@ -221,12 +230,15 @@ const JOB_PHRASES = [
 const VET_WORDS =["vet", "veterinary", "animal hospital"];
 const BILL_WORDS = ["invoice", "bill", "statement", "payment due", "autopay"];
 const TRIP_WORDS = ["flight", "boarding pass", "itinerary", "reservation", "check-in", "hotel", "booking"];
-const PURCHASE_WORDS = ["order", "receipt", "shipped", "delivered", "delivery", "tracking", "purchase", "package", "pick up"];
+/** Transactions: buying (an order, its shipping) and money moving (a transfer, a deposit, a payment sent or received, a refund). */
+const TRANSACTION_WORDS = ["order", "receipt", "shipped", "delivered", "delivery", "tracking", "purchase", "package", "pick up",
+  "transaction", "transfer", "deposit", "withdrawal", "refund", "payment received", "payment sent", "payment confirmation", "you paid", "paid you", "sent you money", "money request"];
 /**
  * Order-status phrases, looked for in the start of the text: a shop's notice whose subject says nothing ("meet your
  * next coffee") still has them. Never "shipping" or "delivery" alone, which promos say all the time ("free shipping").
  */
-const ORDER_PHRASES = ["estimated arrival", "estimated delivery", "order number", "order confirmation", "tracking number", "out for delivery", "has shipped", "your shipment"];
+const ORDER_PHRASES = ["estimated arrival", "estimated delivery", "order number", "order confirmation", "tracking number", "out for delivery", "has shipped", "your shipment",
+  "transaction id", "transfer amount", "has been deposited", "available balance"];
 
 /**
  * The bundle a mail sits in, or null when it stands alone (a person's mail). The rules, most specific first (the first
@@ -242,14 +254,14 @@ const ORDER_PHRASES = ["estimated arrival", "estimated delivery", "order number"
  *  4. bills: ctx.bills is not null, and the sender is the same site as a record's url or has its title; or the subject
  *            has invoice, bill, statement, payment due, autopay.
  *  5. trips:     flight, boarding pass, itinerary, reservation, check-in, hotel, booking.
- *  6. purchases: order, receipt, shipped, delivered, delivery, tracking, purchase, package, pick up in the subject; or an order-status
- *                phrase (ORDER_PHRASES) in the start of the text.
- *  7. social:    the sender's domain is a social network's (facebookmail.com, linkedin.com, instagram.com, reddit.com,
- *                redditmail.com, discord.com, nextdoor.com, x.com).
- *  8. other:     a developer or work tool's notice (TOOLS: github.com, gitlab.com, ...), or a reply in a mailing list's
- *                discussion (a List-Id and a "Re:" subject), though it carries unsubscribe.
- *  9. promos:    anything left that carries unsubscribe.
- * 10. other:     anything else a system sent.
+ *  6. transactions: a buying or money word (TRANSACTION_WORDS: order, receipt, shipped, transfer, deposit, refund,
+ *                payment received...) in the subject; or an order or money phrase (ORDER_PHRASES) in the start of the text.
+ *  7. updates:   the sender's domain is a social network's (facebookmail.com, linkedin.com, instagram.com, reddit.com,
+ *                redditmail.com, discord.com, nextdoor.com, x.com) or a developer or work tool's (TOOLS: github.com,
+ *                gitlab.com, ...), though it carries unsubscribe.
+ *  8. none:      a reply in a mailing list's discussion (a List-Id and a "Re:" subject) stands alone, as people talking.
+ *  9. promotions: anything left that carries unsubscribe.
+ * 10. updates:   anything else a system sent.
  */
 export function bundleOf(mail: BundleMail, ctx: BundleContext): string | null {
   const domain = domainOf(mail.from.address);
@@ -293,9 +305,9 @@ export function bundleOf(mail: BundleMail, ctx: BundleContext): string | null {
 
   // 5 to 9: the bundles every mail can have.
   if (hasWord(subject, TRIP_WORDS)) return "trips";
-  if (hasWord(subject, PURCHASE_WORDS) || hasWord(start, ORDER_PHRASES)) return "purchases";
-  if (fromAny(SOCIAL)) return "social";
-  if (fromAny(TOOLS) || (mail.list_id && REPLY.test(subject))) return "other";
-  if (mail.unsubscribe) return "promos";
-  return "other";
+  if (hasWord(subject, TRANSACTION_WORDS) || hasWord(start, ORDER_PHRASES)) return "transactions";
+  if (fromAny(SOCIAL) || fromAny(TOOLS)) return "updates";
+  if (mail.list_id && REPLY.test(subject)) return null;
+  if (mail.unsubscribe) return "promotions";
+  return "updates";
 }

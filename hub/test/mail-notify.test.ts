@@ -38,7 +38,7 @@ test("mail notify: a bundle switched on notifies; what it says follows the detai
   const msgs: Msg[] = [];
   const { t, events } = await setUp(msgs);
   try {
-    assert.equal((await setNotify(t, { bundle: "promos", on: true })).status, 200);
+    assert.equal((await setNotify(t, { bundle: "promotions", on: true })).status, 200);
     await setNotify(t, { detail: "sender" });
     msgs.push({ uid: 3, folder: "INBOX", at: new Date(), subject: "Half off", from: { name: "Shop", address: "deals@shop.example" }, messageId: "p@x", plain: "Sale", headers: PROMO });
     msgs.push({ uid: 4, folder: "INBOX", at: new Date(), subject: "Lunch?", from: ALEX, messageId: "l@x", plain: "Noon?" });
@@ -63,14 +63,14 @@ test("mail notify: a held bundle is quiet when mail arrives and notifies when it
     const now = new Date();
     const slot = new Date(now.getTime() - 60_000);
     const hhmm = `${String(slot.getHours()).padStart(2, "0")}:${String(slot.getMinutes()).padStart(2, "0")}`;
-    await setNotify(t, { bundle: "promos", on: true });
-    await t.api("/mail/settings/bundles/promos", { method: "PUT", json: { mode: "daily", time: hhmm } });
+    await setNotify(t, { bundle: "promotions", on: true });
+    await t.api("/mail/settings/bundles/promotions", { method: "PUT", json: { mode: "daily", time: hhmm } });
     msgs.push({ uid: 3, folder: "INBOX", at: new Date(now.getTime() - 3 * 3600_000), subject: "Half off", from: { name: "Shop", address: "deals@shop.example" }, messageId: "p@x", plain: "Sale", headers: PROMO });
     await t.api("/mail/refresh", { method: "POST" });
     assert.equal(events.length, 0, "held: quiet when it arrives");
     assert.equal(notifyDeliveries(t.hub, new Date(now.getTime() - 5 * 60_000)), 0, "the first look only marks the time");
     assert.equal(notifyDeliveries(t.hub, now), 1);
-    assert.equal(events[0].title, "Promos: Shop: Half off");
+    assert.equal(events[0].title, "Promotions: Shop: Half off");
     assert.equal(notifyDeliveries(t.hub, new Date(now.getTime() + 60_000)), 0, "once per showing");
   } finally { done(t); }
 });
@@ -78,7 +78,7 @@ test("mail notify: a held bundle is quiet when mail arrives and notifies when it
 test("mail notify: settings are checked, and the assistant cannot change them", async () => {
   const { t } = await setUp([]);
   try {
-    for (const bad of [{ people: "yes" }, { detail: "everything" }, { bundle: "promos" }, { bundle: "made-up", on: true }]) {
+    for (const bad of [{ people: "yes" }, { detail: "everything" }, { bundle: "promotions" }, { bundle: "made-up", on: true }]) {
       assert.ok([404, 422].includes((await setNotify(t, bad)).status), JSON.stringify(bad));
     }
     const list = await (await t.api("/mail")).json() as { mail_notify: unknown };

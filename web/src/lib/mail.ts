@@ -38,7 +38,7 @@ export interface MailCard {
   source: "sender" | "text";
 }
 /** A card's icon: the bundle it belongs with. */
-export const CARD_ICON: Record<MailCard["kind"], string> = { package: "purchases", order: "purchases", flight: "trips", stay: "trips", table: "trips", event: "trips", booking: "trips", bill: "bills" };
+export const CARD_ICON: Record<MailCard["kind"], string> = { package: "transactions", order: "transactions", flight: "trips", stay: "trips", table: "trips", event: "trips", booking: "trips", bill: "bills" };
 
 /** A card's time as words: a day ("Tue, Dec 15"), or a day and time ("Tue, Dec 3, 8:00 AM"). */
 export function cardTime(at: string): string {
@@ -385,14 +385,13 @@ export interface CustomBundle { id: string; name: string; color: number; address
 /** A bundle's color class: `b-<id>` for the built-in ones, `b-custom ccN` for the owner's. */
 export const bundleClass = (b: Bundle) => (b.custom !== undefined ? `b-custom cc${b.custom}` : `b-${b.id}`);
 export const BUNDLES: Bundle[] = [
-  { id: "purchases", name: "Purchases" },
+  { id: "transactions", name: "Transactions" },
   { id: "trips", name: "Trips" },
-  { id: "social", name: "Social" },
-  { id: "promos", name: "Promos" },
+  { id: "updates", name: "Updates" },
+  { id: "promotions", name: "Promotions" },
   { id: "bills", name: "Bills", module: "renewals", moduleName: "Renewals and bills", screen: "/renewals" },
   { id: "pet", name: "Pet", module: "pet", moduleName: "Pet", screen: "/pet" },
   { id: "jobs", name: "Jobs", module: "jobs", moduleName: "Job search", screen: "/lists/jobs" },
-  { id: "other", name: "Other" },
 ];
 
 /** The bundles shown: the always-there ones, and a module's only while it is on. */
@@ -566,7 +565,7 @@ export function viewMessages<T extends MailSummary>(messages: T[], view: MailVie
   return messages.filter((m) => m.state === "inbox").sort((a, b) => shownAt(b).localeCompare(shownAt(a)));
 }
 
-/** "Purchases: Northwind, Larkspur Books": who a bundle's mail is from, each name once. */
+/** "Transactions: Northwind, Larkspur Books": who a bundle's mail is from, each name once. */
 export const sendersLine = (mails: MailSummary[]) => [...new Set(mails.map((m) => personLabel(m.from)))].join(", ");
 
 // ---------------------------------------------------------------------------------------------------------------------

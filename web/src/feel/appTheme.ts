@@ -21,8 +21,8 @@ export const CLASSIC = {
  * readable there.
  */
 export const MAIL_WORDS = {
-  light: { purchases: "#27764b", trips: "#7048c0", social: "#be3735", promos: "#48740e", bills: "#1f6f43", pet: "#a25315", jobs: "#4352b8", other: "#5d6470", inbox: "#2f5fbf", snoozed: "#8f5f0e", done: "#30764b" },
-  dark: { purchases: "#40ab71", trips: "#a38cd9", social: "#d38280", promos: "#73a826", bills: "#40ab70", pet: "#d38649", jobs: "#8994d8", other: "#9399a5", inbox: "#7b98d4", snoozed: "#cc8c1a", done: "#42ab69" },
+  light: { transactions: "#27764b", trips: "#7048c0", updates: "#be3735", promotions: "#b8185a", bills: "#1f6f43", pet: "#a25315", jobs: "#4352b8", folder: "#5d6470", inbox: "#2f5fbf", snoozed: "#8f5f0e", done: "#30764b" },
+  dark: { transactions: "#40ab71", trips: "#a38cd9", updates: "#d38280", promotions: "#e07aa6", bills: "#40ab70", pet: "#d38649", jobs: "#8994d8", folder: "#9399a5", inbox: "#7b98d4", snoozed: "#cc8c1a", done: "#42ab69" },
 } as const;
 
 /** Mail's color over a row being pointed at (styles.css `--mail-hover`): black or white, and how much of it. */
