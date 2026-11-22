@@ -1794,3 +1794,14 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
   .mailx-bar.selecting .mailx-bar-left > h1 { flex: none; width: calc(var(--mailx-rail, 210px) - 26px); padding-right: 0; margin-right: 0; border-right: 0; overflow: hidden; text-overflow: ellipsis; }
   .mailx-bar.selecting .mailx-selbar .mailx-selall { margin-left: 43px; }
 }
+/*
+ * The bar keeps to the page's right margin: its right edge where the mail list's is (16px, and from 1200px the side
+ * list's width more, as .mailx-main's), so New mail and the selection's ✕ line up with the list. And Pinned only's
+ * button is the height of its switch, so the bar's row is 36px with or without a selection (it was 40px, which set
+ * the title 2px lower than while selecting).
+ */
+.mailx-bar .mailx-switch { padding-top: 0; padding-bottom: 0; }
+@media (min-width: 768px) { .mailx-bar { padding-right: 16px; } }
+@media (min-width: 1200px) { .mailx-bar { padding-right: calc(var(--mailx-rail, 210px) + 16px); } }
+/* The selection's ✕ stays at the right margin: pinned to the bar's end, the actions scrolling under it when they do not all fit. */
+.mailx-selbar .mailx-selclear { position: sticky; right: 0; margin-left: auto; background: var(--barc); box-shadow: -10px 0 10px -4px var(--barc); border-radius: 50%; }
