@@ -202,6 +202,8 @@ export interface Connections {
   icloud?: ICloudConnection;
   /** Other mail accounts for the Mail screen (Gmail or any IMAP server), linked with an app password (never sent back). Absent on older hubs. */
   imap?: ImapConnection;
+  /** Internet Accounts: every linked account once, with what it can do and what is on. Absent on older hubs. */
+  internet?: InternetAccount[];
   /** LastPass or 1Password through its CLI, for secrets in the assistant's commands. Absent on older hubs. */
   password_manager?: PasswordManagerView;
 }
@@ -253,6 +255,23 @@ export interface ICloudConnection {
 export interface ImapAccountView { email: string; preset: "gmail" | "imap"; host: string; port: number; user: string; linked_at: string; last_error: string | null }
 export interface ImapConnection {
   accounts: ImapAccountView[];
+}
+/**
+ * One account in Internet Accounts: iCloud, Google signed in with Google (receipts only), Gmail with an app password, or
+ * another IMAP server. A feature is null when the account cannot do it; `receipts` holds what receipts came to.
+ */
+export interface InternetAccount {
+  key: string;
+  kind: "icloud" | "google" | "gmail" | "imap";
+  email: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  linked_at: string;
+  last_sync: string | null;
+  last_error: string | null;
+  features: { inbox: boolean | null; receipts: boolean | null; calendars: boolean | null };
+  receipts?: Pick<GmailAccount, "listed" | "to_read" | "read" | "failed" | "filed">;
 }
 /** Linking another mail account: Gmail (the hub fills in the server) or any IMAP server over TLS. */
 export type ImapLink = { email: string; password: string; user?: string } & ({ preset: "gmail" } | { preset: "imap"; host: string; port?: number });
@@ -727,6 +746,10 @@ export class HubClient {
   /** Link another mail account for the Mail screen; the hub checks it with the server once. */
   linkImap(link: ImapLink) {
     return this.req<ImapConnection>("PUT", "/connections/imap", link);
+  }
+  /** Switch what an account does: `inbox` (shown in Mail) and `receipts` (read for Mail receipts). */
+  setAccountFeatures(key: string, body: { inbox?: boolean; receipts?: boolean }) {
+    return this.req<{ inbox: boolean; receipts: boolean }>("PUT", `/connections/accounts/${encodeURIComponent(key)}`, body);
   }
   /** Unlink another mail account: the hub deletes its password and its mail on the Mail screen. */
   disconnectImap(email: string) {

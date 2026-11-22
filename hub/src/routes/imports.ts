@@ -9,7 +9,7 @@ import { listImports, stopImport, textImport, uploadImport } from "../imports/bu
 import { atlassianReturn, atlassianSignIn, atlassianSpaces, disconnectAtlassian, setAtlassianApp, setAtlassianSpaces, syncConfluence } from "../imports/confluence.js";
 import { applicationsList, filmsLibrary, gamesLibrary } from "../imports/library.js";
 import { checkGoogleApp, disconnectGoogle, googleReturn, googleSignIn, listMail, mailCounts, setGoogleApp } from "../imports/gmail.js";
-import { icloudSource, linkICloud, linkImap, unlinkICloud, unlinkImap } from "../imports/icloud.js";
+import { icloudSource, imapSource, linkICloud, linkImap, setMailboxFeatures, unlinkICloud, unlinkImap } from "../imports/icloud.js";
 import { guideFor, parseGuideService } from "../guides.js";
 import { hubAddress } from "../setup.js";
 import { mailboxLabel, mailReading, mailSchedule, readMailNow } from "../mail-filer.js";
@@ -101,8 +101,28 @@ export function importRoutes() {
   // password checked with the server once and kept sealed; never returned.
   r.put("/connections/imap", async (c) => {
     const hub = c.get("hub");
-    if (!hub.modules.on("mail_inbox")) throw new StoreError(404, "Mail is off. Turn it on in Settings, Modules.");
-    return c.json(await linkImap(hub, await readJsonObject(c), () => { void refreshMail(hub).catch((e) => console.error(`[mail-inbox] ${errCode(e)}`)); }));
+    if (!hub.modules.on("mail_inbox") && !hub.modules.on("mail")) throw new StoreError(404, "Mail and Mail receipts are off. Turn one on in Settings, Modules.");
+    return c.json(await linkImap(hub, await readJsonObject(c), (account) => {
+      if (hub.modules.on("mail_inbox")) void refreshMail(hub).catch((e) => console.error(`[mail-inbox] ${errCode(e)}`));
+      if (hub.modules.on("mail") && imapSource.accounts(hub).includes(account)) void imapSource.list(hub, account).catch((e) => console.error(`[mail] ${errCode(e)}`));
+    }));
+  });
+  // Internet Accounts (since 2026-11-22): one account's switches. Mail off takes its mail off the Mail screen at once;
+  // Receipts off drops what was waiting to be read (what was filed stays).
+  r.put("/connections/accounts/:key", async (c) => {
+    const hub = c.get("hub");
+    const key = decodeURIComponent(c.req.param("key")).toLowerCase();
+    if (!/^(icloud|imap):[^\s@]+@[^\s@]+$/.test(key)) throw new StoreError(404, "that account has no switches");
+    const body = await readJsonObject(c);
+    const on = setMailboxFeatures(hub, key, body);
+    if (body.inbox === false) deleteMailbox(hub.mailDb, key);
+    if (body.inbox === true && hub.modules.on("mail_inbox")) void refreshMail(hub).catch((e) => console.error(`[mail-inbox] ${errCode(e)}`));
+    if (body.receipts === false) hub.db.prepare("DELETE FROM mail WHERE account = ? AND state = 'queued'").run(key);
+    if (body.receipts === true && hub.modules.on("mail")) {
+      const source = key.startsWith("imap:") ? imapSource : icloudSource;
+      if (source.accounts(hub).includes(key)) void source.list(hub, key).catch((e) => console.error(`[mail] ${errCode(e)}`));
+    }
+    return c.json(on);
   });
   r.delete("/connections/imap/:email", (c) => {
     const hub = c.get("hub");
@@ -182,6 +202,7 @@ export function connectionsView(hub: Hub) {
     ...v,
     google: { ...v.google, reading: mailReading(hub), ...mailSchedule(hub), accounts: v.google.accounts.map((a) => ({ ...a, ...mailCounts(hub, a.email) })) },
     icloud: { accounts: v.icloud.accounts.map((a) => ({ ...a, ...mailCounts(hub, `icloud:${a.email}`) })) },
+    internet: v.internet.map((a) => (a.features.receipts ? { ...a, receipts: mailCounts(hub, a.key) } : a)),
     password_manager: passwordManagerView(hub),
   };
 }

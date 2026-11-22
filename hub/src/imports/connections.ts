@@ -108,6 +108,16 @@ export class ConnectionStore {
       icloud: {
         accounts: (c.icloud ?? []).filter((a) => a.mail !== false).map((a) => ({ email: a.email, linked_at: a.linked_at, last_sync: a.last_sync ?? null, last_error: a.last_error ?? null })),
       },
+      /**
+       * Internet Accounts (since 2026-11-22): every linked account once, with what each can do and what is on.
+       * A feature is null when the account cannot do it (Sign in with Google reads only: no Mail screen).
+       */
+      internet: [
+        ...(c.icloud ?? []).map((a) => ({ key: `icloud:${a.email}`, kind: "icloud" as const, email: a.email, linked_at: a.linked_at, last_sync: a.last_sync ?? null, last_error: a.last_error ?? null, features: { inbox: a.inbox ?? a.mail !== false, receipts: a.mail !== false, calendars: !!a.calendar } })),
+        ...(c.google ?? []).map((a) => ({ key: a.email, kind: "google" as const, email: a.email, linked_at: a.linked_at, last_sync: a.last_sync ?? null, last_error: a.last_error ?? null, features: { inbox: null, receipts: true, calendars: null } })),
+        ...(c.imap ?? []).map((a) => ({ key: `imap:${a.email}`, kind: a.preset === "gmail" ? "gmail" as const : "imap" as const, email: a.email, host: a.host, port: a.port, user: a.user, linked_at: a.linked_at, last_sync: a.last_sync ?? null, last_error: a.last_error ?? null,
+          features: { inbox: a.inbox ?? a.mail !== false, receipts: a.mail !== false && !(c.google ?? []).some((g) => g.email === a.email), calendars: null } })),
+      ],
       // Other mail accounts (since 2026-11-22): where they are and who signs in, never the password.
       imap: {
         accounts: (c.imap ?? []).map((a) => ({ email: a.email, preset: a.preset, host: a.host, port: a.port, user: a.user, linked_at: a.linked_at, last_error: a.last_error ?? null })),

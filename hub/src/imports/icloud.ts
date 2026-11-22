@@ -66,6 +66,11 @@ export interface ICloudAccount {
   refused_at?: string | null;
   /** Whether its mail is read (Mail receipts). Absent is yes: accounts linked before calendars were. */
   mail?: boolean;
+  /**
+   * Whether its Inbox shows on the Mail screen (Internet Accounts, since 2026-11-22). Absent follows `mail`, as before:
+   * a mailbox linked only for calendars shows on neither.
+   */
+  inbox?: boolean;
   /** Its calendars, when calendar sync uses this account (calendar-sync.ts). */
   calendar?: import("../calendar-sync.js").CalendarConf;
 }
@@ -205,6 +210,9 @@ export interface ImapAccount extends ICloudAccount {
   /** The username the server takes, most often the address itself. */
   user: string;
 }
+
+/** Whether a mailbox's Inbox shows on the Mail screen. */
+export const inboxOn = (a: { inbox?: boolean; mail?: boolean }) => a.inbox ?? a.mail !== false;
 
 /** The presets: the server filled in for the owner. */
 export const IMAP_PRESETS = { gmail: { host: "imap.gmail.com", port: 993, name: "Gmail" } } as const;
@@ -1202,7 +1210,7 @@ export const icloudSource: MailSource = {
 /** The Mail screen's iCloud source (imports/inbox-source.ts): its Inbox listing, its move (Inbox to Archive and back) and read or unread. */
 export const icloudInbox: InboxSource = {
   prefix: PREFIX,
-  accounts: (hub) => icloudSource.accounts(hub),
+  accounts: (hub) => (hub.connections.get().icloud ?? []).filter(inboxOn).map((a) => accountName(a.email)),
   list: (hub, account, since, known, knownMessage, opts) => listInboxICloud(hub, account, since, known, knownMessage, opts),
   move: (hub, account, refs, to) => moveICloud(hub, account, refs, to),
   setSeen: (hub, account, refs, seen) => setSeenICloud(hub, account, refs, seen),
@@ -1220,5 +1228,44 @@ export const icloudInbox: InboxSource = {
 export const imapInbox: InboxSource = {
   ...icloudInbox,
   prefix: IMAP_PREFIX,
-  accounts: (hub) => (hub.connections.get().imap ?? []).map((a) => `${IMAP_PREFIX}${a.email}`),
+  accounts: (hub) => (hub.connections.get().imap ?? []).filter(inboxOn).map((a) => `${IMAP_PREFIX}${a.email}`),
 };
+
+/**
+ * Other mail accounts as a Mail receipts source (since 2026-11-22): one app password serves the Mail screen and
+ * receipts. An address also signed in with Google is read for receipts there only, so its mail is filed once.
+ */
+export const imapSource: MailSource = {
+  kind: "imap",
+  accounts: (hub) => {
+    const c = hub.connections.get();
+    return (c.imap ?? []).filter((a) => a.mail !== false && !c.google?.some((g) => g.email === a.email)).map((a) => `${IMAP_PREFIX}${a.email}`);
+  },
+  list: (hub, accountKey, opts) => listICloud(hub, accountKey, new Date(), opts),
+  read: (hub, accountKey, id) => readICloud(hub, accountKey, id),
+  // Gmail's own web search by Message-ID for a Gmail address; elsewhere the mail app's message link, as for iCloud.
+  link: (ref) => {
+    const email = ref.account.slice(IMAP_PREFIX.length);
+    const mid = ref.message_id?.trim().replace(/^<|>$/g, "");
+    if (mid && /@(gmail|googlemail)\.com$/.test(email)) return `https://mail.google.com/mail/?authuser=${encodeURIComponent(email)}#search/rfc822msgid%3A${encodeURIComponent(mid)}`;
+    return icloudLink(ref);
+  },
+  isOwnLink: (url) => url.startsWith("message://") || url.startsWith("https://mail.google.com/"),
+};
+
+/**
+ * An account's switches (Internet Accounts, since 2026-11-22): `receipts` (Mail receipts reads it) and `inbox` (the Mail
+ * screen shows it), each only when given. The account stays linked whatever is off; Remove unlinks it.
+ */
+export function setMailboxFeatures(hub: Hub, key: string, body: Record<string, unknown>): { receipts: boolean; inbox: boolean } {
+  const a = account(hub, key);
+  for (const k of ["receipts", "inbox"] as const) if (body[k] !== undefined && typeof body[k] !== "boolean") throw new StoreError(422, `${k} is true or false`);
+  const fields: Partial<ICloudAccount> = {};
+  if (typeof body.receipts === "boolean") fields.mail = body.receipts;
+  // The Mail screen's switch is kept on its own once set, so turning receipts off leaves Mail as it was.
+  if (typeof body.inbox === "boolean") fields.inbox = body.inbox;
+  else if (typeof body.receipts === "boolean" && a.inbox === undefined) fields.inbox = inboxOn(a);
+  saveAccount(hub, key, fields);
+  const now = account(hub, key);
+  return { receipts: now.mail !== false, inbox: inboxOn(now) };
+}

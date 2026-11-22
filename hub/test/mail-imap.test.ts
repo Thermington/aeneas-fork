@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeHub, type TestHub } from "./helpers.js";
 import { ago, done, fake, linked, PASSWORD } from "./fake-icloud-mail.js";
-import { archiveOf, setMailLookup, type ImapFolder } from "../src/imports/icloud.js";
-import { listMail } from "../src/mail-inbox.js";
+import { archiveOf, imapSource, setMailLookup, type ImapFolder } from "../src/imports/icloud.js";
+import { INBOX_SOURCES, listMail } from "../src/mail-inbox.js";
 
 // Other mail accounts on the Mail screen (since 2026-11-22): Gmail and any IMAP server, beside iCloud. Every server,
 // address and password here is made up; the fake server stands in for every real one, and names are looked up by a
@@ -37,8 +37,8 @@ test("other accounts: only a server name, a TLS port and an app password are tak
   const t = setUp();
   try {
     fake([]);
-    await t.api("/modules", { method: "PUT", json: { mail_inbox: false } });
-    assert.equal((await link(t, { email: "robin@fastmail.example", host: "imap.fastmail.example", password: PASSWORD })).status, 404, "Mail is off");
+    await t.api("/modules", { method: "PUT", json: { mail_inbox: false, mail: false } });
+    assert.equal((await link(t, { email: "robin@fastmail.example", host: "imap.fastmail.example", password: PASSWORD })).status, 404, "Mail and Mail receipts are off");
     await on(t);
     for (const [body, why] of [
       [{ email: "not an address", host: "imap.fastmail.example", password: PASSWORD }, "an address"],
@@ -122,4 +122,58 @@ test("other accounts: Done's folder is Archive, else Gmail's All Mail, else a fo
   assert.equal(archiveOf([f("INBOX"), f("[Gmail]", undefined, ["\\Noselect"]), f("[Gmail]/All Mail", "\\All"), f("[Gmail]/Sent Mail", "\\Sent")])?.path, "[Gmail]/All Mail");
   assert.equal(archiveOf([f("INBOX"), f("INBOX.Archive")])?.path, "INBOX.Archive");
   assert.equal(archiveOf([f("INBOX"), f("Old")]), null);
+});
+
+test("internet accounts: one app password feeds the Mail screen and receipts, each with its own switch", async () => {
+  const t = setUp();
+  try {
+    fake([{ uid: 1, folder: "INBOX", at: ago(1), subject: "Your receipt", from: { name: "Shop", address: "billing@shop.example" }, messageId: "r1@x", plain: "Total $9.99" }]);
+    await on(t);
+    await link(t, { email: "robin@fastmail.example", host: "imap.fastmail.example", password: PASSWORD });
+    const KEY = "imap:robin@fastmail.example";
+    assert.deepEqual(imapSource.accounts(t.hub), [KEY], "receipts read it by default");
+    await imapSource.list(t.hub, KEY);
+    assert.equal((t.hub.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE account = ?").get(KEY) as { n: number }).n, 1, "the receipt is queued for the filer");
+    const view = async () => (await (await t.api("/connections")).json() as { internet: { key: string; kind: string; features: Record<string, boolean | null>; receipts?: { to_read: number } }[] }).internet;
+    assert.deepEqual((await view()).map((a) => [a.key, a.kind, a.features, a.receipts?.to_read]), [[KEY, "imap", { inbox: true, receipts: true, calendars: null }, 1]]);
+
+    // Receipts off: the queue goes, the Mail screen stays.
+    const sw = (body: unknown, key = KEY) => t.api(`/connections/accounts/${encodeURIComponent(key)}`, { method: "PUT", json: body });
+    assert.deepEqual(await (await sw({ receipts: false })).json(), { receipts: false, inbox: true });
+    assert.deepEqual(imapSource.accounts(t.hub), []);
+    assert.equal((t.hub.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE account = ?").get(KEY) as { n: number }).n, 0);
+    await t.api("/mail/refresh", { method: "POST" });
+    assert.equal(listMail(t.hub.mailDb).length, 1, "still on the Mail screen");
+    // Mail off: its mail leaves the screen at once, and the next refresh does not bring it back.
+    assert.deepEqual(await (await sw({ inbox: false })).json(), { receipts: false, inbox: false });
+    assert.equal(listMail(t.hub.mailDb).length, 0);
+    await t.api("/mail/refresh", { method: "POST" });
+    assert.equal(listMail(t.hub.mailDb).length, 0);
+    assert.equal(t.hub.connections.get().imap?.length, 1, "the account stays linked with both off");
+    assert.equal((await sw({ inbox: "yes" })).status, 422);
+    assert.equal((await sw({ inbox: true }, "robin@gmail.example")).status, 404, "Sign in with Google has no switches");
+  } finally { tearDown(t); }
+});
+
+test("internet accounts: an address also signed in with Google is read for receipts there only; iCloud keeps Mail and receipts apart", async () => {
+  const t = setUp();
+  try {
+    fake([]);
+    await on(t);
+    await link(t, { email: "robin@gmail.example", preset: "gmail", password: "abcdefghijklmnop" });
+    assert.deepEqual(imapSource.accounts(t.hub), ["imap:robin@gmail.example"]);
+    t.hub.connections.update((c) => { c.google = [{ email: "robin@gmail.example", linked_at: new Date().toISOString() } as never]; });
+    assert.deepEqual(imapSource.accounts(t.hub), [], "filed once, through Sign in with Google");
+    const internet = (t.hub.connections.view() as unknown as { internet: { kind: string; features: Record<string, boolean | null> }[] }).internet;
+    assert.deepEqual(internet.map((a) => [a.kind, a.features]), [["google", { inbox: null, receipts: true, calendars: null }], ["gmail", { inbox: true, receipts: false, calendars: null }]]);
+    // A Gmail address gets Gmail's own link for what receipts file; another server the mail app's.
+    assert.match(imapSource.link({ account: "imap:robin@gmail.com", id: "1:2:INBOX", message_id: "<a@b>" }), /^https:\/\/mail\.google\.com\/.*rfc822msgid%3Aa%40b$/);
+    assert.match(imapSource.link({ account: "imap:robin@fastmail.example", id: "1:2:INBOX", message_id: "<a@b>" }), /^message:\/\//);
+
+    // iCloud: receipts off keeps it on the Mail screen (before, one switch did both).
+    linked(t);
+    const sw = await t.api(`/connections/accounts/${encodeURIComponent("icloud:robin@icloud.example")}`, { method: "PUT", json: { receipts: false } });
+    assert.deepEqual(await sw.json(), { receipts: false, inbox: true });
+    assert.deepEqual(INBOX_SOURCES.flatMap((s) => s.accounts(t.hub)).filter((a) => a.startsWith("icloud:")), ["icloud:robin@icloud.example"]);
+  } finally { tearDown(t); }
 });
