@@ -207,6 +207,10 @@ export function Mail() {
   const toggleBundle = (id: string) => setOpenBundles((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const here = view.startsWith("b:") ? shown.find((b) => b.id === view.slice(2)) : null;
   const folder = view.startsWith("f:") ? list.data?.folders?.find((f) => f.key === view.slice(2)) : undefined;
+  /** Pinned only works in the Inbox and in each bundle (2026-11-22): there it keeps only the bundle's pinned mail. */
+  const pinnable = view === "inbox" || !!here;
+  /** A view's mail as listed, with Pinned only applied in a bundle. */
+  const viewed = (all: MailThread[]) => (here && pinnedOnly ? all.filter((m) => m.pinned) : all);
   const title = folder ? folderLabel(folder) : here?.name ?? (view === "snoozed" ? "Snoozed" : view === "done" ? "Done" : "Inbox");
   const barClass = folder ? "v-folder" : here ? bundleClass(here) : `v-${view}`;
   const [actErr, setActErr] = useState("");
@@ -292,7 +296,7 @@ export function Mail() {
   // The rows in the order shown, for the arrow keys: threads, and a bundle's row (with its threads while it is open).
   const navItems = useMemo(() => {
     if (!list.data || editing) return [];
-    if (view !== "inbox") return viewMessages(messages, view, shown).map((m) => m.id);
+    if (view !== "inbox") return viewed(viewMessages(messages, view, shown)).map((m) => m.id);
     const out: string[] = pinnedOnly || q.trim() ? [] : reminders.map((r) => `rem:${r.id}`);
     for (const s of inboxSections(messages, shown, { pinnedOnly, delivery })) {
       for (const r of s.rows) {
@@ -458,8 +462,8 @@ export function Mail() {
             <button type="button" className="mailx-search-btn" aria-label="Search mail" title="Search mail" onClick={openSearch}><Icon name="search" /></button>
             <input ref={searchRef} type="search" className="mailx-search" placeholder="Search mail" aria-label="Search mail" value={q} onChange={(e) => setQ(e.target.value)} onBlur={() => { if (!q) setSearchOpen(false); }} />
             <button type="button" className="mailx-search-close" aria-label="Close the search" title="Close the search" onClick={closeSearch}>✕</button>
-            {/* Only the Inbox has it; elsewhere an unseen stand-in of its size keeps the search box in the same place. */}
-            <button type="button" className={`mailx-switch${view === "inbox" ? "" : " placeholder"}`} aria-pressed={pinnedOnly} aria-label="Pinned only" title="Pinned only" aria-hidden={view !== "inbox" || undefined} tabIndex={view === "inbox" ? undefined : -1} onClick={() => setPinnedOnly((x) => !x)}>
+            {/* The Inbox and each bundle have it; elsewhere an unseen stand-in of its size keeps the search box in the same place. */}
+            <button type="button" className={`mailx-switch${pinnable ? "" : " placeholder"}`} aria-pressed={pinnedOnly} aria-label="Pinned only" title="Pinned only" aria-hidden={!pinnable || undefined} tabIndex={pinnable ? undefined : -1} onClick={() => setPinnedOnly((x) => !x)}>
               <span className="sw" aria-hidden="true"><span className="knob"><Icon name="pin" /></span></span>
             </button>
           </div>
@@ -517,7 +521,7 @@ export function Mail() {
               ? <FolderView key={folder.key} f={folder} q={q} stamp={list.data} open={open} setOpen={setOpen} />
             : view === "inbox"
               ? <InboxList reminders={pinnedOnly || q.trim() ? [] : reminders} tasks={tasks} remindFor={remindFor} setRemindFor={setRemindFor} messages={messages} shown={shown} delivery={delivery} pinnedOnly={pinnedOnly} open={open} setOpen={setOpen} openBundles={openBundles} toggleBundle={toggleBundle} searching={!!q.trim()} waiting={!list.data.mailboxes.some((m) => m.last_refresh)} />
-              : <Flat messages={viewMessages(messages, view, shown)} view={view} bundle={here ?? null} open={open} setOpen={setOpen}
+              : <Flat messages={viewed(viewMessages(messages, view, shown))} view={view} bundle={here ?? null} pinnedOnly={!!here && pinnedOnly} open={open} setOpen={setOpen}
                   edit={here?.custom !== undefined ? () => setEditing(list.data?.custom_bundles?.find((c) => c.id === here.id) ?? null) : undefined} />}
           {/* Typing a search: beside the view's own matches, every kept mail's (whole texts, folders too). */}
           {!person && !editing && !!list.data?.mailboxes.length && q.trim().length >= 3 && <HitList key="everywhere" title="In all your mail" q={q.trim()} stamp={list.data} />}
@@ -864,7 +868,7 @@ function ReminderRow({ r, task, picking, setPicking }: { r: DueReminder; task: E
   );
 }
 
-function Flat({ messages, view, bundle, open, setOpen, edit }: { messages: MailThread[]; view: MailView; bundle: Bundle | null; open: string | null; setOpen: (id: string | null) => void; edit?: () => void }) {
+function Flat({ messages, view, bundle, pinnedOnly = false, open, setOpen, edit }: { messages: MailThread[]; view: MailView; bundle: Bundle | null; pinnedOnly?: boolean; open: string | null; setOpen: (id: string | null) => void; edit?: () => void }) {
   const editButton = edit && <button type="button" className="mailx-act mailx-editbundle" onClick={edit}><Icon name="pencil" /><span>Edit bundle</span></button>;
   // The Trips bundle: each trip's mail as one box, then the mail in no trip as rows.
   const trips = bundle?.id === "trips" ? tripsOf(messages) : [];
@@ -873,7 +877,7 @@ function Flat({ messages, view, bundle, open, setOpen, edit }: { messages: MailT
   if (!messages.length) {
     if (view === "snoozed") return <Empty title="Nothing snoozed" text="Snoozed mail waits here until its time." />;
     if (view === "done") return <Empty title="Nothing done yet" text="Mail you mark done shows here." />;
-    return <div className="mailx-col">{bundle && <ModuleLink b={bundle} />}{editButton}{bundle && <DeliveryControl b={bundle} mails={messages} />}<Empty title={`No ${bundle?.name.toLowerCase() ?? ""} mail`} text="New mail of this kind gathers here." /></div>;
+    return <div className="mailx-col">{bundle && <ModuleLink b={bundle} />}{editButton}{bundle && <DeliveryControl b={bundle} mails={messages} />}{pinnedOnly ? <Empty title={`No pinned ${bundle?.name.toLowerCase() ?? ""} mail`} text="Pin a mail here and it shows while Pinned only is on." /> : <Empty title={`No ${bundle?.name.toLowerCase() ?? ""} mail`} text="New mail of this kind gathers here." />}</div>;
   }
   return (
     <div className="mailx-col">

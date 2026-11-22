@@ -54,7 +54,7 @@ Reload the list after every action, and when the screen comes back to the front.
   - Counts: Inbox shows its unread threads that are showing now; each bundle shows its unread threads; Drafts shows how
     many there are; Spam and the owner's folders show unread; Sent and Trash show none.
 - **Top bar**, in the current view's color: the title (the view's name). In the middle are Refresh, the search box and
-  the **Pinned only** switch (Inbox only, a pin inside its knob); on the right is **New mail** **(next PR)**. While mail
+  the **Pinned only** switch (the Inbox and, next PR, each bundle, where it keeps only the bundle's pinned mail; a pin inside its knob); on the right is **New mail** **(next PR)**. While mail
   is selected, the view's name stays and "N selected" follows it, with Done (Move to Inbox in Done), Snooze, Pin/Unpin, Mark read,
   Mark unread and ✕. It keeps one height either way.
 - **Search** matches every word, ignoring case, in the sender's name, the address, the subject and the preview. It
