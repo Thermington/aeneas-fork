@@ -380,7 +380,7 @@ export const personLabel = (p: MailAddress) => p.name.trim() || p.address;
 export interface Bundle { id: string; name: string; module?: string; moduleName?: string; screen?: string; custom?: number }
 
 /** A bundle of the owner's, as the hub keeps it: a name, a color, and its rules. */
-export interface CustomBundle { id: string; name: string; color: number; addresses: string[]; domains: string[]; words: string[] }
+export interface CustomBundle { id: string; name: string; color: number; addresses: string[]; domains: string[]; words: string[]; body_words?: string[]; to?: string[] }
 
 /** A bundle's color class: `b-<id>` for the built-in ones, `b-custom ccN` for the owner's. */
 export const bundleClass = (b: Bundle) => (b.custom !== undefined ? `b-custom cc${b.custom}` : `b-${b.id}`);
@@ -473,6 +473,14 @@ export const whereLabel = (h: Pick<SearchHit, "where" | "folder_name" | "state">
 
 /** How a mail can be unsubscribed from (GET /mail/messages/:id/unsubscribe), and whether this hub goes through Tor. */
 export interface UnsubscribeOptions { one_click?: { host: string }; link?: string; mailto?: { to: string; subject: string }; tor: boolean }
+
+/** Snoozed threads coming back later today (after `now`, before midnight), soonest first: the Inbox's "Back later today". */
+export function backLaterToday<T extends MailSummary>(threads: T[], now: Date = new Date()): T[] {
+  const end = new Date(now); end.setHours(24, 0, 0, 0);
+  return threads
+    .filter((m) => m.state === "snoozed" && m.snooze_until && Date.parse(m.snooze_until) > now.getTime() && Date.parse(m.snooze_until) < end.getTime())
+    .sort((a, b) => a.snooze_until!.localeCompare(b.snooze_until!));
+}
 
 /**
  * The Inbox's "Needs you" digest: threads in the Inbox the model marked for today or as needing a reply, today's

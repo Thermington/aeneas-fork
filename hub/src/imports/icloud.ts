@@ -469,6 +469,7 @@ function inboxMail(id: string, msg: ImapMessage, text: string, shown: { html: st
     from,
     // IMAP servers fill Reply-To with From when a mail has none, so only a different address is worth a warning.
     reply_to: replyTo && replyTo !== from.address ? replyTo : null,
+    rcpt: [...new Set([...(env.to ?? []), ...(env.cc ?? [])].slice(0, 50).map((a) => mailAddress(a).address).filter(Boolean))],
     subject: (env.subject ?? "").slice(0, 500),
     text: text.slice(0, TEXT_MAX),
     automated: isAutomated(msg.headers, from.address),

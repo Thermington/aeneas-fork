@@ -106,6 +106,9 @@ The time beside a row is the hour today, the weekday this week, else the date (w
 
 ---
 
+**Back later today (next PR):** above the day headings, the snoozed threads coming back later today (`backLaterToday`),
+soonest first, as rows showing "Until 3 PM"; they open from there.
+
 **Needs you (next PR):** above the day headings, up to 5 Inbox threads the hub's model marked `today` or `needs_reply`
 (`needsYou`), today's first, each with its people, Today and Reply marks and the model's summary (else the subject),
 opening the thread; with a line saying it was sorted by the hub's model and can be wrong. Rows of mail needing a reply
@@ -200,6 +203,8 @@ This part matters most. Mail is hostile input.
   - Next week: Monday at 8 AM.
   - The owner's snooze times change all of these. A snoozed thread offers **Change snooze** and **Unsnooze**. Snoozing
     shows Undo.
+- **Undo for more (next PR):** Pin and Unpin, Mark read and Mark unread (one or a selection) and Block show the Undo
+  bar too: it puts each thread back as it was, marks the same mail back, or unblocks (mail already in Spam stays).
 - **Pin** applies to the whole thread. Pinned mail stays where it is, shows a pin, and Sweep passes it by. **(next PR)**
   A pin is also Apple Mail's flag, both ways: pinning flags the thread's mail in iCloud, and a mail flagged in Apple
   Mail shows pinned after the next refresh.
@@ -270,6 +275,8 @@ The hub sends new-mail alerts to devices. The client only offers the settings:
 
 - **The fields:** a name (1 to 40 characters), a color (0 to 7), and at least one rule: addresses, domains (a domain
   takes its subdomains), or subject words (whole words).
+- **More rules (next PR):** words in the mail's text (`body_words`, its first 3,000 characters, whole words) and who
+  it was sent to (`to`, an alias in To or Cc; known for mail arriving from 2026-11-22 on).
 - **They're checked before the built-in rules,** so they can take a person's mail too ("Family").
 - **At most 20.** Deleting one clears its Show in Inbox and Notify settings first.
 

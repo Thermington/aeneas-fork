@@ -136,6 +136,8 @@ export function openMailDb(dbPath: string): DB {
   if (!inboxCols.includes("triaged_at")) db.exec("ALTER TABLE inbox ADD COLUMN triaged_at TEXT");
   // A folding note (since 2026-11-22): the owner said the fold hid something; kept with the mail, never sent anywhere.
   if (!inboxCols.includes("fold_note")) db.exec("ALTER TABLE inbox ADD COLUMN fold_note TEXT");
+  // Recipients (since 2026-11-22): To and Cc, for the owner's bundle rules; NULL for mail kept before.
+  if (!inboxCols.includes("rcpt")) db.exec("ALTER TABLE inbox ADD COLUMN rcpt TEXT");
   if (!(db.prepare("PRAGMA table_info(folder_mail)").all() as { name: string }[]).some((c) => c.name === "attachments")) db.exec("ALTER TABLE folder_mail ADD COLUMN attachments TEXT");
   return db;
 }
@@ -168,8 +170,8 @@ const folderOf = (id: string) => /^\d+:\d+:([\s\S]+)$/.exec(id)?.[1] ?? "";
  *    it goes. Done mail is in Archive and stays (for its kept time). Nothing goes when the listing found no Inbox.
  */
 export function keepInbox(db: DB, account: string, found: { present: string[] | null; seen?: string[] | null; flagged?: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; refs?: { id: string; refs: string[] }[] }): { kept: number; gone: number; woken: string[]; fresh: string[] } {
-  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen, cards, attachments)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insert = db.prepare(`INSERT OR IGNORE INTO inbox (account, id, key, message_id, at, from_name, from_address, reply_to, subject, text, automated, unsubscribe, list_id, html, remote, logo_domain, refs, mine, state, seen, cards, attachments, rcpt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const setRefs = db.prepare("UPDATE inbox SET refs = ? WHERE account = ? AND id = ?");
   const fresh: string[] = [];
   // A brand's logo, fetched later (fetchMailImages); a new address for it is fetched again.
@@ -191,7 +193,7 @@ export function keepInbox(db: DB, account: string, found: { present: string[] | 
     for (const m of found.mails) {
       const added = insert.run(account, m.id, mailKey(account, m.id), m.message_id, m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
         m.subject, m.text, m.automated ? 1 : 0, m.unsubscribe ? 1 : 0, m.list_id, m.html, m.html && m.remote.length ? JSON.stringify(m.remote) : null, m.logo?.domain ?? null,
-        JSON.stringify(m.refs ?? []), m.mine ? 1 : 0, m.mine ? "sent" : "inbox", m.mine ? 1 : 0, JSON.stringify(m.mine ? [] : m.cards ?? []), m.attachments ? JSON.stringify(m.attachments) : null).changes;
+        JSON.stringify(m.refs ?? []), m.mine ? 1 : 0, m.mine ? "sent" : "inbox", m.mine ? 1 : 0, JSON.stringify(m.mine ? [] : m.cards ?? []), m.attachments ? JSON.stringify(m.attachments) : null, m.rcpt ? JSON.stringify(m.rcpt) : null).changes;
       if (added && !m.mine) { kept++; fresh.push(mailKey(account, m.id)); }
       if (m.logo) logo.run(m.logo.domain, m.logo.url);
     }
@@ -397,6 +399,9 @@ export const previewOf = (text: string) => withoutSignature(ownWords(text.slice(
   .replace(/(https?:\/\/|www\.)[^\s)]+/gi, "")
   .replace(/\s+/g, " ").replace(/\s+([.,;:!?])/g, "$1").trim().slice(0, 200);
 
+/** The kept recipients (To and Cc), or undefined for mail kept before they were. */
+const rcptOf = (s: string | null | undefined): string[] | undefined => { try { return s ? (JSON.parse(s) as string[]) : undefined; } catch { return undefined; } };
+
 /** A kept triage, or null (none, or one the hub cannot read). */
 const triageOf = (s: string | null | undefined): Triage | null => { try { return s ? readTriage(s) : null; } catch { return null; } };
 
@@ -434,10 +439,10 @@ export const LIST_MAX = 5000;
  * the screen sorts it into Inbox, Snoozed, Done and the bundles.
  */
 export function listMail(db: DB, ctx: BundleContext = NO_MODULES): MailSummary[] {
-  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments, triage, fold_note FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null })[];
+  const rows = db.prepare("SELECT key, at, from_name, from_address, reply_to, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, rcpt, bundle, state, pinned, snooze_until, logo_domain, back_at, seen, thread, mine, cards, attachments, triage, fold_note FROM inbox ORDER BY coalesce(back_at, at) DESC, key LIMIT ?").all(LIST_MAX) as (Row & { unsubscribe: number; list_id: string | null; rcpt: string | null })[];
   return rows.map((r) => ({
     ...summary(r),
-    bundle: bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx),
+    bundle: bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text, to: rcptOf(r.rcpt) }, ctx),
   }));
 }
 
@@ -622,13 +627,13 @@ export function notifyNewMail(hub: Hub, keys: string[], now = new Date()): numbe
   const settings = mailNotify(db);
   const delivery = bundleDelivery(db);
   const ctx = bundleContext(hub);
-  const get = db.prepare("SELECT from_name, from_address, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, state, seen FROM inbox WHERE key = ?");
+  const get = db.prepare("SELECT from_name, from_address, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, rcpt, state, seen FROM inbox WHERE key = ?");
   const hits: { name: string; subject: string }[] = [];
   for (const key of keys) {
-    const r = get.get(key) as { from_name: string; from_address: string; subject: string; text: string; automated: number; unsubscribe: number; list_id: string | null; state: string; seen: number } | undefined;
+    const r = get.get(key) as { from_name: string; from_address: string; subject: string; text: string; automated: number; unsubscribe: number; list_id: string | null; rcpt: string | null; state: string; seen: number } | undefined;
     // Mail already read in another mail app is not news.
     if (!r || r.state !== "inbox" || r.seen) continue;
-    const bundle = bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx);
+    const bundle = bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text, to: rcptOf(r.rcpt) }, ctx);
     const wanted = bundle === null ? settings.people : settings.bundles.includes(bundle) && (delivery[bundle]?.mode ?? "now") === "now";
     if (wanted) hits.push({ name: oneLine(r.from_name) || oneLine(r.from_address), subject: oneLine(r.subject, 120) });
   }
@@ -682,14 +687,14 @@ export function notifyDeliveries(hub: Hub, now = new Date()): number {
   if (!due.length) return 0;
   const ctx = bundleContext(hub);
   const custom = new Map(customBundles(db).map((c) => [c.id, c.name]));
-  const rows = db.prepare("SELECT from_name, from_address, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, at, pinned FROM inbox WHERE state = 'inbox' AND mine = 0 AND at >= ?")
-    .all(new Date(now.getTime() - 8 * DAY_MS).toISOString()) as { from_name: string; from_address: string; subject: string; text: string; automated: number; unsubscribe: number; list_id: string | null; at: string; pinned: number }[];
+  const rows = db.prepare("SELECT from_name, from_address, subject, substr(text, 1, 3000) AS text, automated, unsubscribe, list_id, rcpt, at, pinned FROM inbox WHERE state = 'inbox' AND mine = 0 AND at >= ?")
+    .all(new Date(now.getTime() - 8 * DAY_MS).toISOString()) as { from_name: string; from_address: string; subject: string; text: string; automated: number; unsubscribe: number; list_id: string | null; rcpt: string | null; at: string; pinned: number }[];
   let sent = 0;
   for (const { b, d, at } of due) {
     const from = new Date(at);
     from.setDate(from.getDate() - (d.mode === "daily" ? 1 : 7));
     const hits = rows.filter((r) => !r.pinned && r.at >= from.toISOString() && r.at < at.toISOString()
-      && bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text }, ctx) === b)
+      && bundleOf({ from: { name: r.from_name, address: r.from_address }, subject: r.subject, automated: !!r.automated, unsubscribe: !!r.unsubscribe, list_id: r.list_id, text: r.text, to: rcptOf(r.rcpt) }, ctx) === b)
       .map((r) => ({ name: (r.from_name.trim() || r.from_address).slice(0, 60), subject: r.subject.replace(/\s+/g, " ").trim().slice(0, 120) }));
     if (!hits.length) continue;
     hub.bus.emit("notify", { id: `mail:${b}:${at.toISOString()}`, kind: "mail", title: notifyTitle(hits, settings.detail, `${BUNDLE_NAMES[b] ?? custom.get(b) ?? "Mail"}: `), at: now.toISOString() });

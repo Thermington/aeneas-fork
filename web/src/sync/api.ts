@@ -1076,7 +1076,7 @@ export class HubClient {
     return this.req<CustomBundle>("POST", "/mail/settings/custom-bundles", b);
   }
   mailBundleUpdate(b: CustomBundle) {
-    return this.req<CustomBundle>("PUT", `/mail/settings/custom-bundles/${encodeURIComponent(b.id)}`, { name: b.name, color: b.color, addresses: b.addresses, domains: b.domains, words: b.words });
+    return this.req<CustomBundle>("PUT", `/mail/settings/custom-bundles/${encodeURIComponent(b.id)}`, { name: b.name, color: b.color, addresses: b.addresses, domains: b.domains, words: b.words, body_words: b.body_words ?? [], to: b.to ?? [] });
   }
   mailBundleDelete(id: string) {
     return this.req<{ ok: true }>("DELETE", `/mail/settings/custom-bundles/${encodeURIComponent(id)}`);

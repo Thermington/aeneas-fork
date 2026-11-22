@@ -23,6 +23,7 @@ import {
   cardLink,
   type MailCard,
   type SearchHit,
+  backLaterToday,
   selectAll,
   type FoldNote,
   foldedLines,
@@ -128,11 +129,13 @@ interface LookValue {
   relocate: (ids: string[], to: MoveTarget, said: string, back: MoveTarget | null) => Promise<void>;
   /** The mailbox's other folders, for Move to. */
   folders: MailFolder[];
+  /** The Undo bar for an action done elsewhere (a pin, a read mark, a block): its words, and what undoes it. */
+  offerUndo: (text: string, run: () => Promise<void>) => void;
   /** All mail with one person (the people view), and going to a mail where it is (from a search hit). */
   showPerson: (who: MailAddress) => void;
   showInPlace: (h: SearchHit) => void;
 }
-const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {}, snoozeTimes: SNOOZE_DEFAULTS, delivery: {}, notifyOn: NOTIFY_DEFAULTS, cursor: null, selected: new Set(), pick: () => {}, relocate: async () => {}, folders: [], showPerson: () => {}, showInPlace: () => {} });
+const Look = createContext<LookValue>({ logos: {}, shown: [], act: async () => {}, move: async () => {}, snooze: async () => {}, unsnooze: async () => {}, snoozeFor: null, setSnoozeFor: () => {}, openMail: () => {}, snoozeTimes: SNOOZE_DEFAULTS, delivery: {}, notifyOn: NOTIFY_DEFAULTS, cursor: null, selected: new Set(), pick: () => {}, relocate: async () => {}, folders: [], showPerson: () => {}, showInPlace: () => {}, offerUndo: () => {} });
 export function Mail() {
   const list = usePoll((c) => c.mailList(), 60_000);
   const { on } = useModules();
@@ -324,10 +327,19 @@ export function Mail() {
     await move(ts.flatMap((t) => (back ? t.ids.done : t.ids.open)), back ? "inbox" : "done");
     setSelected(new Set());
   };
-  const pinAll = (ts: MailThread[]) => { const to = !ts.every((t) => t.pinned); void act(async (c) => { for (const t of ts) await c.mailPin(t.id, to); }); };
+  const pinAll = (ts: MailThread[]) => {
+    const to = !ts.every((t) => t.pinned);
+    const was = ts.map((t) => [t.id, t.pinned] as const);
+    void act(async (c) => { for (const t of ts) await c.mailPin(t.id, to); });
+    setUndo({ text: ts.length === 1 ? (to ? "Pinned" : "Unpinned") : `${ts.length} ${to ? "pinned" : "unpinned"}`, run: () => act(async (c) => { for (const [id, p] of was) if (p !== to) await c.mailPin(id, p); }) });
+  };
   const readAll = (ts: MailThread[], read: boolean) => {
     if (!read && open && ts.some((t) => t.id === open)) setOpen(null);
-    void act(async (c) => { for (const part of batches(ts.flatMap((t) => (read ? t.ids.unread : [t.id])))) await c.mailSeenMany(part, read); });
+    const ids = ts.flatMap((t) => (read ? t.ids.unread : [t.id]));
+    if (!ids.length) return;
+    void act(async (c) => { for (const part of batches(ids)) await c.mailSeenMany(part, read); });
+    // Undo: the same mail marked back (those that were unread, or the ones just marked unread).
+    setUndo({ text: `${ts.length === 1 ? "Marked" : `${ts.length} marked`} ${read ? "read" : "unread"}`, run: () => act(async (c) => { for (const part of batches(ids)) await c.mailSeenMany(part, !read); }) });
   };
   const snoozeAll = async (ts: MailThread[], until: Date) => {
     const c = engine.client;
@@ -411,7 +423,7 @@ export function Mail() {
   }, [cursor]);
 
   return (
-    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), relocate, folders: list.data?.folders ?? [], showPerson: (who) => { setPerson(who); setOpen(null); setMenu(false); }, showInPlace: (h) => { setPerson(null); setQ(""); setSearchOpen(false); setView(h.where === "snoozed" ? "snoozed" : h.where === "done" ? "done" : "inbox"); setOpen(byId.has(h.id) ? h.id : [...byId.values()].find((t) => t.members.some((x) => x.id === h.id))?.id ?? null); }, snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
+    <Look.Provider value={{ logos: list.data?.logos ?? {}, shown, act, move, snooze, unsnooze, snoozeFor, setSnoozeFor, openMail: (id) => setOpen(id), relocate, folders: list.data?.folders ?? [], offerUndo: (text, run) => setUndo({ text, run }), showPerson: (who) => { setPerson(who); setOpen(null); setMenu(false); }, showInPlace: (h) => { setPerson(null); setQ(""); setSearchOpen(false); setView(h.where === "snoozed" ? "snoozed" : h.where === "done" ? "done" : "inbox"); setOpen(byId.has(h.id) ? h.id : [...byId.values()].find((t) => t.members.some((x) => x.id === h.id))?.id ?? null); }, snoozeTimes: list.data?.snooze_times ?? SNOOZE_DEFAULTS, delivery, notifyOn: list.data?.mail_notify ?? NOTIFY_DEFAULTS, cursor, selected, pick }}>
     <div className={`mailx${menu ? " menu-open" : ""}${selected.size ? " selecting" : ""}`}>
       <div className={`mailx-bar ${barClass}${chosen.length ? " selecting" : ""}${searchOpen || q ? " search-open" : ""}`}>
         <div className="mailx-bar-left">
@@ -760,7 +772,9 @@ function InboxList({ reminders, tasks, remindFor, setRemindFor, messages, shown,
   // Due reminders lead "Today" (a "Today" of their own when no mail came today).
   if (reminders.length && sections[0]?.title !== "Today") sections.unshift({ title: "Today", rows: [] });
   const reminderRows = reminders.map((r) => <ReminderRow key={`rem:${r.id}`} r={r} task={tasks.find((t) => t.id === r.id)} picking={remindFor === r.id} setPicking={(on) => setRemindFor(on ? r.id : null)} />);
-  if (!sections.length) {
+  // Snoozed mail coming back later today, shown ahead of time (not while searching or showing pinned mail only).
+  const back = searching || pinnedOnly ? [] : backLaterToday(messages);
+  if (!sections.length && !back.length) {
     if (searching) return <div className="muted small">No mail has all of those words.</div>;
     if (waiting) return <div className="empty">Your Inbox arrives with the first refresh, a minute or so after the hub starts. Refresh brings it now.</div>;
     return <Empty title={pinnedOnly ? "No pinned mail" : "You're all done"} text={pinnedOnly ? "Pinned mail stays here." : "Nothing left in your Inbox."} />;
@@ -779,6 +793,14 @@ function InboxList({ reminders, tasks, remindFor, setRemindFor, messages, shown,
             </button>
           ))}
           <span className="muted small">Sorted by your hub's model from each mail's own words. It can be wrong.</span>
+        </section>
+      )}
+      {!!back.length && (
+        <section className="mailx-group mailx-back" aria-label="Back later today">
+          <h2>Back later today</h2>
+          <div className="mailx-list">
+            {back.map((m) => <Row key={m.id} m={m} open={open === m.id} setOpen={setOpen} />)}
+          </div>
         </section>
       )}
       {sections.map((s, i) => (
@@ -956,6 +978,8 @@ function BundleForm({ start, close, saved }: { start: CustomBundle | null; close
   const [addresses, setAddresses] = useState((start?.addresses ?? []).join("\n"));
   const [domains, setDomains] = useState((start?.domains ?? []).join("\n"));
   const [words, setWords] = useState((start?.words ?? []).join("\n"));
+  const [bodyWords, setBodyWords] = useState((start?.body_words ?? []).join("\n"));
+  const [to, setTo] = useState((start?.to ?? []).join("\n"));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const c = engine.client;
@@ -963,7 +987,7 @@ function BundleForm({ start, close, saved }: { start: CustomBundle | null; close
     if (!c) return;
     setBusy(true); setErr("");
     try {
-      const b = { name, color, addresses: lines(addresses), domains: lines(domains), words: lines(words) };
+      const b = { name, color, addresses: lines(addresses), domains: lines(domains), words: lines(words), body_words: lines(bodyWords), to: lines(to) };
       const r = start ? await c.mailBundleUpdate({ ...b, id: start.id }) : await c.mailBundleAdd(b);
       await saved(r.id);
     } catch (e) { setErr(plainError(e)); setBusy(false); }
@@ -986,6 +1010,9 @@ function BundleForm({ start, close, saved }: { start: CustomBundle | null; close
       <label>From these addresses <textarea rows={3} value={addresses} onChange={(e) => setAddresses(e.target.value)} placeholder={"coach@league.example\nsam@example.com"} /></label>
       <label>From these domains (and any under them) <textarea rows={3} value={domains} onChange={(e) => setDomains(e.target.value)} placeholder="school.example" /></label>
       <label>Subject has these words <textarea rows={3} value={words} onChange={(e) => setWords(e.target.value)} placeholder={"field trip\npermission slip"} /></label>
+      <label>The mail's text has these words <textarea rows={3} value={bodyWords} onChange={(e) => setBodyWords(e.target.value)} placeholder={"soccer practice\nreport card"} /></label>
+      <label>Sent to these addresses (an alias) <textarea rows={2} value={to} onChange={(e) => setTo(e.target.value)} placeholder="family@icloud.com" /></label>
+      <span className="muted small">A mail's text is looked at in its first 3,000 characters, as whole words. Who a mail was sent to is known for mail arriving from now on.</span>
       {err && <div className="error">{err}</div>}
       <div className="row">
         <button type="submit" disabled={busy || !name.trim()}>{start ? "Save" : "Make bundle"}</button>
@@ -1123,12 +1150,12 @@ function Avatar({ m }: { m: MailSummary }) {
 
 /** Pin or unpin: the pin filled while pinned. `labelled`: with its word beside it (an open mail's bar). */
 function PinButton({ m, labelled = false }: { m: MailThread; labelled?: boolean }) {
-  const { act } = useContext(Look);
+  const { act, offerUndo } = useContext(Look);
   const [busy, setBusy] = useState(false);
   const label = m.pinned ? "Unpin" : "Pin";
   return (
     <button type="button" className={`mailx-act${m.pinned ? " on" : ""}`} aria-pressed={m.pinned} title={label} aria-label={label} disabled={busy}
-      onClick={async () => { setBusy(true); await act((c) => c.mailPin(m.id, !m.pinned)); setBusy(false); }}>
+      onClick={async () => { setBusy(true); const was = m.pinned; await act((c) => c.mailPin(m.id, !was)); offerUndo(was ? "Unpinned" : "Pinned", () => act((c) => c.mailPin(m.id, was))); setBusy(false); }}>
       <Icon name="pin" />{labelled && <span>{label}</span>}
     </button>
   );
@@ -1308,7 +1335,7 @@ function Sweep({ mails }: { mails: MailThread[] }) {
  * mail opens as before. Opening reads the thread's unread mail: on the hub and in the mailbox (its read flag only).
  */
 function Card({ m, close }: { m: MailThread; close: () => void }) {
-  const { snoozeFor, act, selected, pick, showPerson } = useContext(Look);
+  const { snoozeFor, act, selected, pick, showPerson, offerUndo } = useContext(Look);
   const picked = selected.has(m.id);
   // The unread messages that open by themselves: the newest few. Each open message is a frame of its own, and a
   // thread of any length opening all at once is more than a page should carry.
@@ -1337,7 +1364,7 @@ function Card({ m, close }: { m: MailThread; close: () => void }) {
         </span>
       </button>
       <div className="mailx-card-acts mailx-card-pad"><DoneButton m={m} labelled /><SnoozeButton m={m} labelled /><PinButton m={m} labelled />
-        <button type="button" className="mailx-act" title="Mark unread, here and in your mail app" onClick={() => { close(); void act((c) => c.mailSeen(m.id, false)); }}><Icon name="dot" /><span>Mark unread</span></button>
+        <button type="button" className="mailx-act" title="Mark unread, here and in your mail app" onClick={() => { close(); void act((c) => c.mailSeen(m.id, false)); offerUndo("Marked unread", () => act((c) => c.mailSeen(m.id, true))); }}><Icon name="dot" /><span>Mark unread</span></button>
         <MoveButtons ids={threadIds(m)} back="inbox" spam />
         {answer && <button type="button" className={`mailx-act${tools ? " on" : ""}`} aria-expanded={tools} title="Unsubscribe from this sender's mail, or block them" onClick={() => setTools((x) => !x)}><Icon name="spam" /><span>Unsubscribe or block</span></button>}
         {answer && <button type="button" className="mailx-act" title={`All your mail with ${answer.from.address}`} onClick={() => showPerson(answer.from)}><Icon name="person" /><span>All with {personLabel(answer.from).split(/\s+/)[0]}</span></button>}
@@ -1517,7 +1544,7 @@ function AroundLine({ label, value, rows, waiting, set }: { label: string; value
  * the sender's (or their domain's) mail to Spam, now and from now on.
  */
 function SenderTools({ m, close }: { m: MailSummary; close: () => void }) {
-  const { act } = useContext(Look);
+  const { act, offerUndo } = useContext(Look);
   const [ways, setWays] = useState<UnsubscribeOptions | null>(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -1562,8 +1589,8 @@ function SenderTools({ m, close }: { m: MailSummary; close: () => void }) {
       )}
       <b>Block</b>
       <div className="mailx-compose-acts">
-        <button type="button" disabled={busy} onClick={() => void run(async () => { const r = await engine.client!.mailBlock(m.from.address); await act(async () => undefined); return `Blocked ${m.from.address}: ${r.moved} moved to Spam, and their new mail goes there too.`; })}>Block {m.from.address}</button>
-        {domain && <button type="button" disabled={busy} onClick={() => void run(async () => { const r = await engine.client!.mailBlock(`@${domain}`); await act(async () => undefined); return `Blocked everyone at ${domain}: ${r.moved} moved to Spam.`; })}>Block everyone at {domain}</button>}
+        <button type="button" disabled={busy} onClick={() => void run(async () => { const r = await engine.client!.mailBlock(m.from.address); await act(async () => undefined); offerUndo(`Blocked ${m.from.address}. Undo unblocks; mail already in Spam stays there`, () => act((c) => c.mailUnblock(m.from.address))); return `Blocked ${m.from.address}: ${r.moved} moved to Spam, and their new mail goes there too.`; })}>Block {m.from.address}</button>
+        {domain && <button type="button" disabled={busy} onClick={() => void run(async () => { const r = await engine.client!.mailBlock(`@${domain}`); await act(async () => undefined); offerUndo(`Blocked ${domain}. Undo unblocks; mail already in Spam stays there`, () => act((c) => c.mailUnblock(`@${domain}`))); return `Blocked everyone at ${domain}: ${r.moved} moved to Spam.`; })}>Block everyone at {domain}</button>}
       </div>
       {msg && <div className="small" role="status">{msg}</div>}
       {err && <div className="error small" role="alert">{err}</div>}

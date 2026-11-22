@@ -28,8 +28,10 @@ export interface BundleMail {
   unsubscribe: boolean;
   /** Its List-Id, when it comes from a mailing list. */
   list_id: string | null;
-  /** The start of its text (TEXT_START characters), read only for the job and order phrases. */
+  /** The start of its text (TEXT_START characters), read for the job and order phrases and the owner's text words. */
   text?: string;
+  /** The addresses it was sent to (To and Cc, lowercase), for the owner's recipient rules; absent for mail kept before. */
+  to?: string[];
 }
 
 /** How much of a mail's text the phrases are looked for in: enough to reach a normal mail's signature. */
@@ -55,7 +57,7 @@ export interface BundleContext {
  * of `domains` (or a domain under it), or whose subject has one of `words` (whole words). Checked before the built-in
  * rules, so the owner's wins; unlike those, it may take a person's mail ("Family": a sister's address).
  */
-export interface CustomBundle { id: string; name: string; color: number; addresses: string[]; domains: string[]; words: string[] }
+export interface CustomBundle { id: string; name: string; color: number; addresses: string[]; domains: string[]; words: string[]; body_words?: string[]; to?: string[] }
 export const CUSTOM_MAX = 20;
 const LIST_MAX = 30;
 
@@ -82,8 +84,11 @@ function checked(body: Record<string, unknown>): Omit<CustomBundle, "id"> {
   const addresses = list(body.addresses, "addresses", (x) => x.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
   const domains = list(body.domains, "domains", (x) => x.length <= 253 && /^([a-z0-9-]+\.)+[a-z]{2,}$/.test(x.replace(/^@/, ""))).map((x) => x.replace(/^@/, ""));
   const words = list(body.words, "words", (x) => x.length <= 60);
-  if (!addresses.length && !domains.length && !words.length) throw new StoreError(422, "a bundle needs at least one address, domain or word");
-  return { name, color: body.color as number, addresses, domains, words };
+  // Since 2026-11-22: words in the mail's text (its first 3,000 characters), and the addresses it was sent to (an alias).
+  const bodyWords = list(body.body_words, "body_words", (x) => x.length <= 60);
+  const to = list(body.to, "to", (x) => x.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+  if (!addresses.length && !domains.length && !words.length && !bodyWords.length && !to.length) throw new StoreError(422, "a bundle needs at least one address, domain, word or recipient");
+  return { name, color: body.color as number, addresses, domains, words, ...(bodyWords.length ? { body_words: bodyWords } : {}), ...(to.length ? { to } : {}) };
 }
 
 export function addCustomBundle(db: DB, body: Record<string, unknown>): CustomBundle {
@@ -117,6 +122,8 @@ export function customBundleOf(mail: BundleMail, custom: CustomBundle[]): string
     if (b.addresses.includes(address)) return b.id;
     if (b.domains.some((d) => domain === d || domain.endsWith(`.${d}`))) return b.id;
     if (b.words.length && hasWord(mail.subject, b.words)) return b.id;
+    if (b.body_words?.length && hasWord((mail.text ?? "").slice(0, TEXT_START), b.body_words)) return b.id;
+    if (b.to?.length && mail.to?.some((a) => b.to!.includes(a))) return b.id;
   }
   return null;
 }

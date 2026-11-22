@@ -45,6 +45,8 @@ export interface InboxMail {
   mine: boolean;
   /** Its key facts (mail-cards.ts, mailCards): from the sender's schema.org data in its HTML, or patterns in its text. */
   cards?: MailCard[];
+  /** The addresses it was sent to (To and Cc, lowercase, at most 50), for the owner's bundle rules. */
+  rcpt?: string[];
   /** Its attachments, from its structure (no file read): names, types and sizes. */
   attachments?: import("./icloud.js").MailAttachment[];
 }

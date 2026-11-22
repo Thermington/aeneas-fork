@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLES, selectAll, foldedLines, needsYou, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
+import { BUNDLES, backLaterToday, selectAll, foldedLines, needsYou, whereLabel, fileSize, previewSrc, riskyFile, MAIL_KEYS, folderCount, folderLabel, folderWho, type FolderMail, type MailFolder, tripDates, tripsOf, type MailCard, swipeAction, swipeLock, cardLine, cardLink, cardTime, bundleClass, bundleOf, dueReminders, mailKeyAction, deliveryAt, inboxAt, QUOTE_SELECTOR, threadRows, frameLink, initials, logoSrc, shownAt, snoozeChoices, httpsLink, dayGroup, inboxSections, initial, matches, messageLines, nameHidesAddress, replyToWarning, sendersLine, shownBundles, textParts, viewMessages, whenLabel, type MailSummary } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -471,5 +471,14 @@ describe("mail select all", () => {
     expect(selectAll(shown, new Set(["a", "b", "c"]))).toEqual({ next: new Set(), state: "all" });
     expect(selectAll(shown, new Set(["x"])).next).toEqual(new Set(["a", "b", "c"])); // one no longer shown is dropped
     expect(selectAll([], new Set()).state).toBe("none");
+  });
+});
+
+describe("mail snooze review", () => {
+  it("lists snoozed mail coming back later today, soonest first", () => {
+    const now = new Date(2026, 10, 22, 9, 0);
+    const m = (id: string, until: Date | null, state: MailSummary["state"] = "snoozed"): MailSummary => ({ id, at: "2026-11-20T10:00:00Z", from: { name: "", address: "a@x.example" }, subject: id, preview: "", automated: false, bundle: null, state, pinned: false, ...(until ? { snooze_until: until.toISOString() } : {}) });
+    const list = [m("evening", new Date(2026, 10, 22, 18, 0)), m("noon", new Date(2026, 10, 22, 12, 0)), m("tomorrow", new Date(2026, 10, 23, 8, 0)), m("passed", new Date(2026, 10, 22, 8, 0)), m("inbox", new Date(2026, 10, 22, 12, 0), "inbox")];
+    expect(backLaterToday(list, now).map((x) => x.id)).toEqual(["noon", "evening"]);
   });
 });
