@@ -248,7 +248,8 @@ This part matters most. Mail is hostile input.
 - **The owner's own bundles** come after them, in one of 8 colors.
 - **Colors:** Inbox, Snoozed, Done and each bundle have a color that carries white words at 4.5:1, held by
   `web/src/lib/contrast.test.ts`. Transactions and Bills are greens; Promotions is pink (fill `#c2185b`, dark `#c42d6c`;
-  words `#b8185a`, dark `#e07aa6`); Pet is orange. Folders keep Other's old gray.
+  words `#b8185a`, dark `#e07aa6`); Updates is indigo (fill `#5560a8` in both, words `#5560a8`, dark `#9ba3dc`, the
+  same as the owner's 5th bundle color); Pet is orange. Folders keep Other's old gray.
 - **In a bundle:** the mail newest first, Sweep, **Show in Inbox** (9.3), **Notify me** (9.4), and **Edit bundle** for
   the owner's own.
 - **Trips (next PR):** in the Trips bundle, mail whose flight and stay cards follow each other within a day is one box

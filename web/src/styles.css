@@ -37,7 +37,7 @@
   --mail-item: #ffffff;
   --mail-hover: rgb(0 0 0 / .05);
   --b-trips: #7048c0;
-  --b-updates: #c9413f;
+  --b-updates: #5560a8;
   --b-promotions: #c2185b;
   --b-bills: #1f6f43;
   --b-pet: #b55d18;
@@ -51,7 +51,7 @@
      (web/src/feel/appTheme.ts). */
   --bt-transactions: #27764b;
   --bt-trips: #7048c0;
-  --bt-updates: #be3735;
+  --bt-updates: #5560a8;
   --bt-promotions: #b8185a;
   --bt-bills: #1f6f43;
   --bt-pet: #a25315;
@@ -82,7 +82,7 @@
     --mail-item: #212328;
     --mail-hover: rgb(255 255 255 / .06);
     --b-trips: #7d5cc9;
-    --b-updates: #c1514e;
+    --b-updates: #5560a8;
     --b-promotions: #c42d6c;
     --b-bills: #2f7d52;
     --b-pet: #aa6229;
@@ -94,7 +94,7 @@
     /* The same colors as words and icons, lighter: on the dark page, a row and a row being pointed at. */
     --bt-transactions: #40ab71;
     --bt-trips: #a38cd9;
-    --bt-updates: #d38280;
+    --bt-updates: #9ba3dc;
     --bt-promotions: #e07aa6;
     --bt-bills: #40ab70;
     --bt-pet: #d38649;
@@ -130,7 +130,7 @@
   --mail-item: #212328;
   --mail-hover: rgb(255 255 255 / .06);
   --b-trips: #7d5cc9;
-  --b-updates: #c1514e;
+  --b-updates: #5560a8;
   --b-promotions: #c42d6c;
   --b-bills: #2f7d52;
   --b-pet: #aa6229;
@@ -142,7 +142,7 @@
   /* The same colors as words and icons, lighter: on the dark page, a row and a row being pointed at. */
   --bt-transactions: #40ab71;
   --bt-trips: #a38cd9;
-  --bt-updates: #d38280;
+  --bt-updates: #9ba3dc;
   --bt-promotions: #e07aa6;
   --bt-bills: #40ab70;
   --bt-pet: #d38649;
