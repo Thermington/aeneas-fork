@@ -144,7 +144,10 @@ is selected. On iOS, the system's swipe actions fit better than copying this.
 
 - **The header:** the circle, the subject, and the sender's **real address, always**: "**Alex** <alex@example.com> ·
   Tue, Nov 24, 9:12 AM". A thread shows "Alex, me (3)" instead, and each message shows its own address.
-- **The actions:** Done, Snooze, Pin, Mark unread, and Reply **(next PR)**.
+- **The thread's actions** (top): Done, Snooze, Pin, Mark unread, and **(next PR)** Delete, Spam, Move to, Unsubscribe or
+  block, and All with <name>.
+- **Each message's actions** (under it; in a thread, under each open message) **(next PR)**: Reply, Reply all and
+  Forward; the owner's own replies have Forward only. The writing box opens right under that message (section 10).
 - **Opening a thread** marks its unread mail read, on the hub and in iCloud (only the read flag). Mark unread must
   not be undone by the thread closing.
 - **A thread's messages are stacked oldest first.** The newest one is open, plus the newest 3 unread ones
@@ -294,14 +297,17 @@ The hub sends new-mail alerts to devices. The client only offers the settings:
 
 Drafts only. Nothing is sent from Aeneas: a draft goes to iCloud's Drafts, and the owner sends it from Apple Mail.
 
-- **Reply** (on an open thread) answers its newest mail from someone else, never the owner's own reply. The hub sets
+- **Which mail a reply answers** **(next PR)**: Reply, Reply all and Forward sit under each message, and the writing box
+  opens right under the one chosen, headed "Replying to Alex · Tue, Nov 24, 9:12 AM" (or "Forwarding …") with that
+  message's first lines quoted (its `preview`, two lines). In a thread there is never a doubt which message it is.
+- **Reply** answers that message, never the owner's own reply. The hub sets
   the recipient (the sender's From address, never its Reply-To), the "Re:" subject and the thread headers. **The
   client sends only `reply_to` and the text.** If the mail's Reply-To differs, say so: "This mail asks for replies to
   go to X. Your reply goes to the address it came from, Y."
 - **New mail** (top bar): To (plain addresses only), Subject and the text.
-- **Reply all** and **Forward** (next PR), beside Reply on an open thread (Forward on a folder's mail too): Reply all
+- **Reply all** and **Forward** (next PR), beside Reply under each message (Forward on a folder's mail too): Reply all
   sends `reply_all: true`, and the hub adds everyone else on the mail as Cc (the preview shows it). Forward has To and an
-  optional note, the mail quoted below it, and says its attachments are not included yet.
+  optional note, with the mail quoted below it; its attachments come along when "Include its attachments" is on.
 - **Greeting and sign-off** (replies): when the reply opens, ask for them (`POST /mail/messages/:id/greeting`) and show
   each as an editable field above and below the text, with **Remove**. Never replace what the owner already typed in
   one. The hub checks both again: at most 2 lines of 60 characters, no links, addresses, long numbers or markup.
@@ -332,3 +338,95 @@ Drafts only. Nothing is sent from Aeneas: a draft goes to iCloud's Drafts, and t
 6. **Keep nothing of the mail on the device** beyond what the screen needs while open. The hub keeps it out of backups
    and sync on purpose.
 7. **The assistant can't reach `/mail`.** Don't hand mail to it from the app.
+
+---
+
+## 12. Platform guidelines: iPhone, iPad and the Mac app
+
+The web screen switches layouts by width; a native client should switch by **size class** and follow each platform's
+own patterns (Apple Mail's are the model), keeping every behavior and every rule above. What the web does at each
+width, and what to use instead:
+
+| Web (by width) | Native |
+|---|---|
+| Below 768px: the phone layout (side list as a drawer behind a menu button) | Compact horizontal size class |
+| 768px and up: the side list always shown | Regular horizontal size class |
+| Up to 560px: search is a magnifier that opens a field across the bar | `.searchable`, which iOS places itself |
+| Up to 420px: Pinned only is a round pin button, New mail a round pencil | Toolbar items with SF Symbols (`pin`, `square.and.pencil`) |
+| A row's actions on hover; touch swipes (on hold on the web) | `.swipeActions` on iOS, hover and a context menu on the Mac |
+
+### 12.1 iPhone (compact width, upright or on its side)
+
+- **Navigation:** a `NavigationStack` whose root is the Inbox. The side list (Inbox, Snoozed, Done, Drafts, Sent, Spam,
+  Trash, the owner's folders, the bundles) is a list pushed from a back button or a sheet, as Apple Mail's Mailboxes.
+- **Toolbar:** the view's title; Pinned only as a toggle; New mail (`square.and.pencil`) at the bottom trailing edge, as
+  in Apple Mail. Refresh is **pull to refresh** (`.refreshable`), not a button.
+- **Search:** `.searchable` on the list: the view's own matches as the owner types, and "In all your mail" (section 2)
+  below them from 3 characters on. iOS keeps the field above the list, so no magnifier is needed.
+- **Rows:** the same contents as section 5, one line each for the people and the subject, at least 44pt tall.
+  Swipe actions with `.swipeActions`: leading Done (Move to Inbox in Done); trailing Snooze, and Delete with
+  `role: .destructive`. A long press offers the rest (Pin, Mark unread, Spam, Move to) as a context menu.
+- **Selection:** the list's Edit mode with checkmarks, and the selection's actions in a bottom toolbar (Done, Snooze,
+  Pin, Mark read or unread, Delete, Spam), instead of the web's circle that turns into a checkbox.
+- **An open thread:** pushed full screen. The thread's actions in the toolbar (Done, Snooze, Pin, and a "More" menu
+  for Mark unread, Delete, Spam, Move to, Unsubscribe or block, All with). Reply, Reply all and Forward under each
+  message, as on the web.
+- **Writing:** a sheet, with "Replying to …" and the quoted lines at the top, the greeting, the text, the sign-off,
+  the smart replies as a row of capsule buttons above the text, and Attach (`PhotosPicker` and `fileImporter`).
+  Preview is the sheet's next step; Save to Drafts is its confirm button.
+- **Attachments:** previews as a horizontal strip of thumbnails. Download is **Save to Files**
+  (`fileExporter` or a share sheet with only "Save to Files"): never Quick Look inside the app, and the risky-file
+  warning (`riskyFile`) as an alert first.
+- **On its side:** most iPhones stay compact, so the same layout with wider rows. The largest iPhones are regular
+  width on their side; there, use the iPad's two columns (12.2).
+
+### 12.2 iPad (regular width)
+
+- **Navigation:** `NavigationSplitView` with three columns: the side list, the list, and the open thread. In portrait
+  or Split View, the side list collapses as the system does it.
+- **Toolbar:** Refresh, the search field, Pinned only, and New mail. Search, Snooze and Move to menus show as popovers.
+- **Keyboard:** with a hardware keyboard, the web's keys (`MAIL_KEYS`) as `.keyboardShortcut`s on the list: arrows,
+  Return to open, Space to select, D, S, P, U, R, Delete, !, / and ?. Show them in the system's shortcut overlay
+  (holding ⌘).
+- **Pointer:** hover shows a row's actions, as on the web desktop.
+- **Writing:** a sheet, or a window of its own when the owner drags it out (`openWindow`).
+
+### 12.3 Mac app (the desktop version)
+
+- **Window:** `NavigationSplitView` with three columns, as Apple Mail on the Mac: the side list, the list, the open
+  thread. A minimum window size that fits all three (about 900 × 600pt); below it, the side list collapses.
+- **Toolbar:** Refresh, Pinned only and New mail as toolbar buttons; `.searchable(placement: .toolbar)` for search,
+  with "In all your mail" in the list below the view's matches. The thread's actions in the toolbar when a thread is
+  open (Done, Snooze, Pin, Delete, Spam, Move to), as Apple Mail places Archive and Move.
+- **Menu bar:** a **Message** menu with the actions and Apple Mail's shortcuts, so the Mac keys feel familiar:
+  Reply ⌘R, Reply All ⇧⌘R, Forward ⇧⌘F, Done (Archive) ⌃⌘A, Delete ⌫, Mark as Unread ⇧⌘U, Move to Spam ⇧⌘J, Pin ⇧⌘L,
+  Refresh ⇧⌘N, New Mail ⌘N. The web's single letters (D, S, P, U, R, !) still work while the list has focus and
+  never while typing, as `MAIL_KEYS` says.
+- **Rows:** hovering a row shows its actions over its time (section 5). **Right-click** gives a context menu with
+  every action, Move to as a submenu of the owner's folders. Native list selection replaces the web's circle:
+  ⌘-click and ⇧-click to select several, then the toolbar and the Message menu act on all of them.
+- **An open thread:** in the third column, the messages stacked as on the web, with Reply, Reply all and Forward under
+  each. A double-click opens the thread in a window of its own.
+- **Writing:** a **window of its own** (`openWindow` with the reply's target), as Apple Mail's compose window, with
+  the "Replying to …" header and quote at the top, and Attach with an open panel or drag and drop onto the window
+  (at most 10 files, 15 MB, the same as the web).
+- **Attachments:** Download opens an **`NSSavePanel`** with the hub's file name; never open the file from the app
+  (no Quick Look, no `NSWorkspace.open` on it). Ask first for a file that can run programs (`riskyFile`). A
+  dragged-out attachment is the same as a download.
+- **Links:** open in the default browser with `NSWorkspace.shared.open`, after the same check as everywhere
+  (`frameLink`: `http`, `https`, `mailto` only).
+- **The mail view:** a `WKWebView` with `allowsContentJavaScript = false`, a content rule list that blocks every
+  network load, and a navigation delegate that cancels every navigation and hands checked links to the browser.
+  Measure the page's height as section 7 says.
+- **Notifications:** the hub's new-mail alerts through `UNUserNotificationCenter` (they already reach Apple devices).
+  A click opens the Mail window at that thread.
+
+### 12.4 Everywhere
+
+- **Dark mode, Dynamic Type and Increase Contrast:** the bundle colors carry white words at 4.5:1 in both modes (as
+  `web/src/lib/contrast.test.ts` holds the web's); text sizes follow the system.
+- **VoiceOver:** every icon button has the web's label (its `aria-label` or `title`); a row reads as
+  "Alex, Gutters, unread, pinned, 2 attachments, Tuesday".
+- **Reduce Motion:** no slide for swipes or the side list, as the web's `prefers-reduced-motion` rules.
+- **Nothing kept on the device** beyond what is on screen (section 11): no offline mail cache, no attachment cache, no
+  Spotlight indexing of mail.
