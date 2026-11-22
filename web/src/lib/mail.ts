@@ -382,6 +382,9 @@ export interface Bundle { id: string; name: string; module?: string; moduleName?
 /** A bundle of the owner's, as the hub keeps it: a name, a color, and its rules. */
 export interface CustomBundle { id: string; name: string; color: number; addresses: string[]; domains: string[]; words: string[]; body_words?: string[]; to?: string[] }
 
+/** The owner's own bundles' eight colors (styles.css `.b-custom.ccN`), by number. */
+export const OWN_COLORS = ["#0f7c86", "#2f6fd0", "#a83e8e", "#b55d18", "#7048c0", "#c9413f", "#2f7d3a", "#8a7410"];
+
 /** A bundle's color class: `b-<id>` for the built-in ones, `b-custom ccN` for the owner's. */
 export const bundleClass = (b: Bundle) => (b.custom !== undefined ? `b-custom cc${b.custom}` : `b-${b.id}`);
 export const BUNDLES: Bundle[] = [

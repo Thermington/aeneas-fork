@@ -21,8 +21,8 @@ export const CLASSIC = {
  * readable there.
  */
 export const MAIL_WORDS = {
-  light: { transactions: "#27764b", trips: "#7048c0", updates: "#5560a8", promotions: "#b8185a", bills: "#1f6f43", pet: "#a25315", jobs: "#4352b8", folder: "#5d6470", inbox: "#2f5fbf", snoozed: "#8f5f0e", done: "#30764b" },
-  dark: { transactions: "#40ab71", trips: "#a38cd9", updates: "#9ba3dc", promotions: "#e07aa6", bills: "#40ab70", pet: "#d38649", jobs: "#8994d8", folder: "#9399a5", inbox: "#7b98d4", snoozed: "#cc8c1a", done: "#42ab69" },
+  light: { transactions: "#0b6870", trips: "#be3735", updates: "#7048c0", promotions: "#b8185a", bills: "#8a5a2b", pet: "#a25315", jobs: "#4f5d75", folder: "#5d6470", inbox: "#2f5fbf", snoozed: "#8f5f0e", done: "#30764b" },
+  dark: { transactions: "#4fb3bd", trips: "#d38280", updates: "#a38cd9", promotions: "#e07aa6", bills: "#c9955f", pet: "#d38649", jobs: "#9aa6ba", folder: "#9399a5", inbox: "#7b98d4", snoozed: "#cc8c1a", done: "#42ab69" },
 } as const;
 
 /** Mail's color over a row being pointed at (styles.css `--mail-hover`): black or white, and how much of it. */

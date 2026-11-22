@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MAIL_HOVER, MAIL_WORDS } from "../feel/appTheme";
+import { OWN_COLORS } from "./mail";
 
 /** WCAG relative luminance from a #rrggbb string. */
 function luminance(hex: string): number {
@@ -74,6 +75,13 @@ describe("design token contrast", () => {
     const pointedAt = over(MAIL_HOVER[name].veil, MAIL_HOVER[name].part, t["mail-item"]);
     it(`${name}: Mail's colors carry white (the bar's words, a bundle's icon, a sender's initials)`, () => {
       for (const id of MAIL) expect(contrast("#ffffff", t[`b-${id}`]), `white on ${id}`).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${name}: the owner's own bundle colors carry white, and are the ones styles.css draws`, () => {
+      const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+      OWN_COLORS.forEach((c, i) => {
+        expect(contrast("#ffffff", c), `white on color ${i + 1}`).toBeGreaterThanOrEqual(4.5);
+        expect(css, `cc${i}`).toContain(`.b-custom.cc${i} { --c: ${c}; --barc: ${c}; }`);
+      });
     });
     it(`${name}: Mail's colors as words read on the page, a row and a row being pointed at, and as icons on the side list`, () => {
       for (const id of MAIL) {

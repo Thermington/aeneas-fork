@@ -245,11 +245,13 @@ This part matters most. Mail is hostile input.
   in that order (ids `transactions`, `updates`, `promotions`, `trips`; before: Purchases, Social, Promos, and Other, now gone: a
   notice nothing else claims is in Updates, and a reply in a mailing list's discussion stands alone). Bills (Renewals and bills),
   Pet and Jobs (Job search) show only while their module is on, each with "Sorted using your … records. Open … ›".
-- **The owner's own bundles** come after them, in one of 8 colors.
+- **The owner's own bundles** come after them, in one of 8 colors (next PR: teal, blue, magenta, orange, violet, red,
+  green, gold, `OWN_COLORS` in `web/src/lib/mail.ts`); they may repeat a built-in bundle's color.
 - **Colors:** Inbox, Snoozed, Done and each bundle have a color that carries white words at 4.5:1, held by
-  `web/src/lib/contrast.test.ts`. Transactions and Bills are greens; Promotions is pink (fill `#c2185b`, dark `#c42d6c`;
-  words `#b8185a`, dark `#e07aa6`); Updates is indigo (fill `#5560a8` in both, words `#5560a8`, dark `#9ba3dc`, the
-  same as the owner's 5th bundle color); Pet is orange. Folders keep Other's old gray.
+  `web/src/lib/contrast.test.ts`. **(next PR)** The places keep their meaning (Inbox blue, Snoozed
+  amber, Done green), and no bundle shares their families: Transactions teal, Updates violet, Promotions pink, Trips
+  red, Bills brown, Pet orange, Jobs slate (values in `web/src/styles.css`, `--b-*` and `--bt-*`). Folders keep Other's
+  old gray.
 - **In a bundle:** the mail newest first, Sweep, **Show in Inbox** (9.3), **Notify me** (9.4), and **Edit bundle** for
   the owner's own.
 - **Trips (next PR):** in the Trips bundle, mail whose flight and stay cards follow each other within a day is one box

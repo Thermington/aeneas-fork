@@ -27,7 +27,7 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* Mail's bundle colors (Mail.tsx) as fills: white icons, initials and the words of the colored top bar sit on them,
      so white reads on each at 4.5:1 (web/src/lib/contrast.test.ts). */
-  --b-transactions: #2a7f50;
+  --b-transactions: #0f7c86;
   /*
    * The Mail screen: two shades, as grouped lists usually have: the page behind the list,
    * and the mail and bundles on it (white, as most mail is). Hover is an overlay on whatever is under it, never a shade.
@@ -36,12 +36,12 @@
   --mail-page: #ecebe7;
   --mail-item: #ffffff;
   --mail-hover: rgb(0 0 0 / .05);
-  --b-trips: #7048c0;
-  --b-updates: #5560a8;
+  --b-trips: #c9413f;
+  --b-updates: #7048c0;
   --b-promotions: #c2185b;
-  --b-bills: #1f6f43;
+  --b-bills: #8a5a2b;
   --b-pet: #b55d18;
-  --b-jobs: #4352b8;
+  --b-jobs: #4f5d75;
   --b-folder: #5d6470;
   --b-inbox: #2f5fbf;
   --b-snoozed: #9e6910;
@@ -49,13 +49,13 @@
   /* The same colors as words and icons (a bundle's name, its link, the side list's icons): each reads at 4.5:1 on the
      page, on a mail's row and on a row being pointed at. A theme moves them toward its own text color where it must
      (web/src/feel/appTheme.ts). */
-  --bt-transactions: #27764b;
-  --bt-trips: #7048c0;
-  --bt-updates: #5560a8;
+  --bt-transactions: #0b6870;
+  --bt-trips: #be3735;
+  --bt-updates: #7048c0;
   --bt-promotions: #b8185a;
-  --bt-bills: #1f6f43;
+  --bt-bills: #8a5a2b;
   --bt-pet: #a25315;
-  --bt-jobs: #4352b8;
+  --bt-jobs: #4f5d75;
   --bt-folder: #5d6470;
   --bt-inbox: #2f5fbf;
   --bt-snoozed: #8f5f0e;
@@ -77,28 +77,28 @@
     --danger: #e07a73;
     --ok: #6cc08a;
     --warn: #e0a84a;
-    --b-transactions: #318256;
+    --b-transactions: #14808a;
     --mail-page: #131417;
     --mail-item: #212328;
     --mail-hover: rgb(255 255 255 / .06);
-    --b-trips: #7d5cc9;
-    --b-updates: #5560a8;
+    --b-trips: #c1514e;
+    --b-updates: #7d5cc9;
     --b-promotions: #c42d6c;
-    --b-bills: #2f7d52;
+    --b-bills: #8f6232;
     --b-pet: #aa6229;
-    --b-jobs: #5767c8;
+    --b-jobs: #5a6880;
     --b-folder: #6b7280;
     --b-inbox: #33569e;
     --b-snoozed: #9a6a14;
     --b-done: #2f7a4b;
     /* The same colors as words and icons, lighter: on the dark page, a row and a row being pointed at. */
-    --bt-transactions: #40ab71;
-    --bt-trips: #a38cd9;
-    --bt-updates: #9ba3dc;
+    --bt-transactions: #4fb3bd;
+    --bt-trips: #d38280;
+    --bt-updates: #a38cd9;
     --bt-promotions: #e07aa6;
-    --bt-bills: #40ab70;
+    --bt-bills: #c9955f;
     --bt-pet: #d38649;
-    --bt-jobs: #8994d8;
+    --bt-jobs: #9aa6ba;
     --bt-folder: #9399a5;
     --bt-inbox: #7b98d4;
     --bt-snoozed: #cc8c1a;
@@ -125,28 +125,28 @@
   --danger: #e07a73;
   --ok: #6cc08a;
   --warn: #e0a84a;
-  --b-transactions: #318256;
+  --b-transactions: #14808a;
   --mail-page: #131417;
   --mail-item: #212328;
   --mail-hover: rgb(255 255 255 / .06);
-  --b-trips: #7d5cc9;
-  --b-updates: #5560a8;
+  --b-trips: #c1514e;
+  --b-updates: #7d5cc9;
   --b-promotions: #c42d6c;
-  --b-bills: #2f7d52;
+  --b-bills: #8f6232;
   --b-pet: #aa6229;
-  --b-jobs: #5767c8;
+  --b-jobs: #5a6880;
   --b-folder: #6b7280;
   --b-inbox: #33569e;
   --b-snoozed: #9a6a14;
   --b-done: #2f7a4b;
   /* The same colors as words and icons, lighter: on the dark page, a row and a row being pointed at. */
-  --bt-transactions: #40ab71;
-  --bt-trips: #a38cd9;
-  --bt-updates: #9ba3dc;
+  --bt-transactions: #4fb3bd;
+  --bt-trips: #d38280;
+  --bt-updates: #a38cd9;
   --bt-promotions: #e07aa6;
-  --bt-bills: #40ab70;
+  --bt-bills: #c9955f;
   --bt-pet: #d38649;
-  --bt-jobs: #8994d8;
+  --bt-jobs: #9aa6ba;
   --bt-folder: #9399a5;
   --bt-inbox: #7b98d4;
   --bt-snoozed: #cc8c1a;
@@ -1162,11 +1162,12 @@ a.mailx-row { color: inherit; text-decoration: none; }
 .mailx-help button.link, .mailx-keyshint { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); cursor: pointer; font: inherit; font-size: 12px; }
 .mailx-keyshint { margin: 6px 10px; text-align: left; }
 @media (hover: none) { .mailx-keyshint { display: none; } }
-/* The owner's own bundles: eight colors of their own, apart from the built-in bundles' (white text on each). */
+/* The owner's own bundles: eight colors spread around the wheel (white text on each); they may repeat a built-in bundle's.
+   Kept in step with OWN_COLORS in web/src/lib/mail.ts. */
 .b-custom.cc0 { --c: #0f7c86; --barc: #0f7c86; } .b-custom.cc1 { --c: #2f6fd0; --barc: #2f6fd0; }
-.b-custom.cc2 { --c: #a83e8e; --barc: #a83e8e; } .b-custom.cc3 { --c: #8a5a2b; --barc: #8a5a2b; }
-.b-custom.cc4 { --c: #5560a8; --barc: #5560a8; } .b-custom.cc5 { --c: #c2416b; --barc: #c2416b; }
-.b-custom.cc6 { --c: #127a9c; --barc: #127a9c; } .b-custom.cc7 { --c: #8a7410; --barc: #8a7410; }
+.b-custom.cc2 { --c: #a83e8e; --barc: #a83e8e; } .b-custom.cc3 { --c: #b55d18; --barc: #b55d18; }
+.b-custom.cc4 { --c: #7048c0; --barc: #7048c0; } .b-custom.cc5 { --c: #c9413f; --barc: #c9413f; }
+.b-custom.cc6 { --c: #2f7d3a; --barc: #2f7d3a; } .b-custom.cc7 { --c: #8a7410; --barc: #8a7410; }
 .mailx-nav.b-custom .ico { color: var(--c); }
 .mailx-newbundle { color: var(--muted); }
 .mailx-editbundle { align-self: flex-start; }
