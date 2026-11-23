@@ -391,9 +391,12 @@ describe("mail swipes", () => {
 
 describe("mail trips", () => {
   const mail = (id: string, cards: MailCard[]): MailSummary => ({ id, at: "2026-11-20T12:00:00Z", from: { name: "", address: "x@air.example" }, subject: id, preview: "", automated: true, bundle: "trips", state: "inbox", pinned: false, seen: true, cards });
-  const out = mail("out", [{ kind: "flight", source: "sender", number: "EA 110", from: "SFO", to: "JFK", at: "2026-12-03T16:00:00Z", until: "2026-12-03T21:30:00Z" }]);
+  // Flight times in this machine's own time zone: a date-only stay is placed at 3 PM local, so a fixed UTC time would sort
+  // differently on a machine in UTC than on one in the Americas.
+  const local = (d: number, h: number, m = 0) => new Date(2026, 11, d, h, m).toISOString();
+  const out = mail("out", [{ kind: "flight", source: "sender", number: "EA 110", from: "SFO", to: "JFK", at: local(3, 8), until: local(3, 13, 30) }]);
   const hotel = mail("hotel", [{ kind: "stay", source: "sender", title: "Harbor Inn", at: "2026-12-03", until: "2026-12-06" }]);
-  const back = mail("back", [{ kind: "flight", source: "sender", number: "EA 111", from: "JFK", to: "SFO", at: "2026-12-06T18:00:00Z" }]);
+  const back = mail("back", [{ kind: "flight", source: "sender", number: "EA 111", from: "JFK", to: "SFO", at: local(6, 10) }]);
   const now = Date.parse("2026-11-20T12:00:00Z");
 
   it("groups the flight out, the hotel and the flight back as one trip, named by where the first flight lands", () => {
